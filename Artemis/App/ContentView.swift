@@ -1,30 +1,52 @@
 import SwiftUI
 
 struct ContentView: View {
+    @State private var navigationPath = [String]()
     @State private var selectedChatId: String?
     @State private var showingSettings: Bool = false
-    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     private let database = AppDatabase.shared
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            SidebarView(selectedChatId: $selectedChatId) {
-                showingSettings = true
-            }
-        } detail: {
-            if let chatId = selectedChatId {
-                ChatView(chatId: chatId)
-                    .id(chatId)
+        Group {
+            if horizontalSizeClass == .regular {
+                // iPad / Mac: Split View
+                NavigationSplitView {
+                    SidebarView(
+                        selectedChatId: $selectedChatId,
+                        onOpenSettings: { showingSettings = true },
+                        onSelectChat: { id in
+                            selectedChatId = id
+                        }
+                    )
+                } detail: {
+                    if let chatId = selectedChatId {
+                        ChatView(chatId: chatId)
+                            .id(chatId)
+                    } else {
+                        emptyStateView
+                    }
+                }
             } else {
-                emptyStateView
+                // iPhone: NavigationStack
+                NavigationStack(path: $navigationPath) {
+                    SidebarView(
+                        selectedChatId: $selectedChatId,
+                        onOpenSettings: { showingSettings = true },
+                        onSelectChat: { id in
+                            navigationPath.append(id)
+                        }
+                    )
+                    .navigationDestination(for: String.self) { chatId in
+                        ChatView(chatId: chatId)
+                            .id(chatId)
+                    }
+                }
             }
         }
         .sheet(isPresented: $showingSettings) {
             SettingsView()
-        }
-        .onAppear {
-            ensureInitialChat()
         }
     }
 
@@ -56,12 +78,6 @@ struct ContentView: View {
             .padding(.top, 8)
         }
         .padding()
-    }
-
-    private func ensureInitialChat() {
-        if let first = try? database.fetchChats().first {
-            selectedChatId = first.id
-        }
     }
 }
 

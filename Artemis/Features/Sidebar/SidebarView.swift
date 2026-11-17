@@ -3,11 +3,11 @@ import SwiftUI
 public struct SidebarView: View {
     @Binding public var selectedChatId: String?
     public var onOpenSettings: () -> Void
+    public var onSelectChat: ((String) -> Void)?
 
     @State private var chats: [Chat] = []
     @State private var searchQuery: String = ""
     @State private var searchHits: [SearchHit] = []
-    @State private var isSearching: Bool = false
     @State private var chatToRename: Chat?
     @State private var renameText: String = ""
     @State private var showingRenameAlert: Bool = false
@@ -15,40 +15,78 @@ public struct SidebarView: View {
     private let database = AppDatabase.shared
     private let chatService = ChatService.shared
 
-    public init(selectedChatId: Binding<String?>, onOpenSettings: @escaping () -> Void) {
+    public init(
+        selectedChatId: Binding<String?>,
+        onOpenSettings: @escaping () -> Void,
+        onSelectChat: ((String) -> Void)? = nil
+    ) {
         self._selectedChatId = selectedChatId
         self.onOpenSettings = onOpenSettings
+        self.onSelectChat = onSelectChat
     }
 
     public var body: some View {
-        List(selection: $selectedChatId) {
+        Group {
             if !searchQuery.isEmpty {
-                Section("Search Results") {
-                    ForEach(searchHits) { hit in
-                        NavigationLink(value: hit.chat.id) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(hit.chat.title)
-                                    .font(.headline)
-                                    .lineLimit(1)
-                                if !hit.snippet.isEmpty {
-                                    Text(hit.snippet)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(2)
+                List {
+                    Section("Search Results") {
+                        ForEach(searchHits) { hit in
+                            Button {
+                                selectedChatId = hit.chat.id
+                                onSelectChat?(hit.chat.id)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(hit.chat.title)
+                                        .font(.headline)
+                                        .foregroundStyle(.primary)
+                                        .lineLimit(1)
+                                    if !hit.snippet.isEmpty {
+                                        Text(hit.snippet)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(2)
+                                    }
                                 }
+                                .padding(.vertical, 2)
                             }
-                            .padding(.vertical, 2)
                         }
                     }
                 }
+            } else if chats.isEmpty {
+                VStack(spacing: 16) {
+                    Image(systemName: "bubble.left.and.bubble.right")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.secondary)
+
+                    Text("No Conversations Yet")
+                        .font(.headline)
+
+                    Text("Start a conversation with your model.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    Button(action: createNewChat) {
+                        Label("New Chat", systemImage: "plus")
+                            .font(.body.weight(.medium))
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                Section {
+                List {
                     ForEach(chats) { chat in
-                        NavigationLink(value: chat.id) {
+                        Button {
+                            selectedChatId = chat.id
+                            onSelectChat?(chat.id)
+                        } label: {
                             HStack {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(chat.title)
                                         .font(.body)
+                                        .foregroundStyle(selectedChatId == chat.id ? Color.accentColor : Color.primary)
                                         .lineLimit(1)
 
                                     Text(timeAgo(chat.updatedAt))
@@ -63,8 +101,10 @@ public struct SidebarView: View {
                                         .controlSize(.small)
                                 }
                             }
-                            .padding(.vertical, 2)
+                            .padding(.vertical, 4)
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                             Button(role: .destructive) {
                                 deleteChat(chat)
@@ -89,9 +129,9 @@ public struct SidebarView: View {
                         }
                     }
                 }
+                .listStyle(.insetGrouped)
             }
         }
-        .listStyle(.sidebar)
         .searchable(text: $searchQuery, prompt: "Search conversations…")
         .onChange(of: searchQuery) { _, query in
             performSearch(query)
@@ -133,6 +173,7 @@ public struct SidebarView: View {
             let newChat = try database.createChat(title: "New Chat", source: .placeholder)
             loadChats()
             selectedChatId = newChat.id
+            onSelectChat?(newChat.id)
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         } catch {
             print("Failed to create chat: \(error)")
