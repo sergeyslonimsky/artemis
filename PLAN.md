@@ -199,13 +199,22 @@ ALTER TABLE providers ADD COLUMN kind TEXT NOT NULL DEFAULT 'custom';
 - Проверено в симуляторе на mock OpenAI-сервере: создание чата, стрим, автозаголовок, regenerate, ошибка
   провайдера, Stop, уход/возврат во время стрима, отправка HEIC-фото, удаление чата с файлами, миграция ключа.
 
-### Этап 1 — Абстракция бэкендов и метаданные
+### Этап 1 — Абстракция бэкендов и метаданные ✅
 
-- [ ] Протокол `ChatBackend`, `ChatTurn`; `OpenAICompatibleBackend` поверх `LLMClient`.
-- [ ] `ProviderKind` + `ProviderCapabilities`, шаблоны провайдеров.
-- [ ] Миграция `v8_routing`; запись `backend/provider_id/model/route_reason` на каждом ответе.
-- [ ] Бейдж бэкенда в футере сообщения.
-- DoD: каждый ответ знает, кто его сгенерировал; UI это показывает.
+- [x] Протокол `ChatBackend` + `ChatTurn` + `BackendDescriptor`; `OpenAICompatibleBackend` поверх `LLMClient`.
+      `ReplyJob` и `AutoTitlingService` работают только через `ChatBackend`.
+- [x] `ProviderKind` (openrouter / openai / mistral / groq / custom) + `ProviderCapabilities`
+      (`supportsImages`, `supportsFileParts`, `supportsStreamUsage`); kind выводится из base URL
+      (при миграции и при сохранении провайдера). Явный выбор шаблона — этап 4.
+- [x] `LLMRequest` учитывает capabilities: `stream_options` только где поддерживается; текстовые документы
+      встраиваются как текст (работает у всех); бинарные файлы/картинки без поддержки → понятная ошибка до запроса.
+- [x] Миграция `v8_routing`: `messages.backend/provider_id/model/route_reason`, `chats.routing_mode`,
+      `settings.default_model/routing_mode/cloud_policy/on_device_enabled/on_device_titles`, `providers.kind`.
+      Типы `BackendKind`, `RoutingMode`, `CloudPolicy`.
+- [x] Метаданные пишутся в плейсхолдер ответа при старте генерации.
+- [x] Бейдж бэкенда под ответом (`☁︎ Provider · model` / `On-device`).
+- Проверено на mock-сервере: метаданные в БД, бейдж, отсутствие `stream_options` для `mistral`.
+  Не проверено вживую: ветки вложений по capabilities (покрыть тестами на этапе 5).
 
 ### Этап 2 — On-device бэкенд
 

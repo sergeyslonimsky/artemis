@@ -215,6 +215,36 @@ public final class AppDatabase: Sendable {
             """)
         }
 
+        // Migration 8: backend metadata on replies, routing settings, provider kinds
+        migrator.registerMigration("v8_routing") { db in
+            try db.execute(sql: """
+            ALTER TABLE messages ADD COLUMN backend      TEXT;
+            ALTER TABLE messages ADD COLUMN provider_id  TEXT;
+            ALTER TABLE messages ADD COLUMN model        TEXT;
+            ALTER TABLE messages ADD COLUMN route_reason TEXT;
+
+            ALTER TABLE chats ADD COLUMN routing_mode TEXT;
+
+            ALTER TABLE settings ADD COLUMN default_model     TEXT;
+            ALTER TABLE settings ADD COLUMN routing_mode      TEXT NOT NULL DEFAULT 'auto';
+            ALTER TABLE settings ADD COLUMN cloud_policy      TEXT NOT NULL DEFAULT 'always_ask';
+            ALTER TABLE settings ADD COLUMN on_device_enabled INTEGER NOT NULL DEFAULT 1;
+            ALTER TABLE settings ADD COLUMN on_device_titles  INTEGER NOT NULL DEFAULT 1;
+
+            ALTER TABLE providers ADD COLUMN kind TEXT NOT NULL DEFAULT 'custom';
+            """)
+
+            // Existing providers: derive the kind from the endpoint.
+            let rows = try Row.fetchAll(db, sql: "SELECT id, base_url FROM providers")
+            for row in rows {
+                let kind = ProviderKind.infer(fromBaseURL: row["base_url"])
+                try db.execute(
+                    sql: "UPDATE providers SET kind = ? WHERE id = ?",
+                    arguments: [kind.rawValue, row["id"] as String]
+                )
+            }
+        }
+
         return migrator
     }
 

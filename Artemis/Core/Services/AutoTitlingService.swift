@@ -11,8 +11,7 @@ public actor AutoTitlingService {
         chatId: String,
         userPrompt: String,
         assistantReply: String,
-        client: LLMClient,
-        model: String
+        backend: any ChatBackend
     ) async {
         // First check if chat is still a placeholder
         guard let chat = try? database.fetchChat(id: chatId),
@@ -30,16 +29,13 @@ public actor AutoTitlingService {
         Assistant: \(truncatedReply)
         """
 
-        let request = LLMRequest(
-            model: model,
-            messages: [
-                Message(chatId: chatId, role: .user, content: titlePrompt)
-            ]
-        )
+        let turn = ChatTurn(messages: [
+            Message(chatId: chatId, role: .user, content: titlePrompt)
+        ])
 
         var accumulated = ""
         do {
-            for try await event in client.stream(request: request) {
+            for try await event in backend.stream(turn) {
                 if case .content(let text) = event {
                     accumulated += text
                 }

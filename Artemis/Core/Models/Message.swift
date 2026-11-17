@@ -45,6 +45,12 @@ public struct Message: Identifiable, Codable, Equatable, Sendable {
     public var error: String?
     public var stats: MessageStats?
     public var attachments: [Attachment]
+    /// Who generated an assistant reply; `nil` for user messages and legacy replies.
+    public var backend: BackendKind?
+    public var providerId: String?
+    public var model: String?
+    /// Why the router picked `backend` (filled in once routing exists).
+    public var routeReason: String?
 
     public init(
         id: String = UUID().uuidString.lowercased(),
@@ -57,7 +63,11 @@ public struct Message: Identifiable, Codable, Equatable, Sendable {
         status: MessageStatus = .done,
         error: String? = nil,
         stats: MessageStats? = nil,
-        attachments: [Attachment] = []
+        attachments: [Attachment] = [],
+        backend: BackendKind? = nil,
+        providerId: String? = nil,
+        model: String? = nil,
+        routeReason: String? = nil
     ) {
         self.id = id
         self.chatId = chatId
@@ -70,6 +80,10 @@ public struct Message: Identifiable, Codable, Equatable, Sendable {
         self.error = error
         self.stats = stats
         self.attachments = attachments
+        self.backend = backend
+        self.providerId = providerId
+        self.model = model
+        self.routeReason = routeReason
     }
 }
 
@@ -90,6 +104,10 @@ extension Message: FetchableRecord, PersistableRecord, TableRecord {
         public static let tokens = Column("tokens")
         public static let tokensEstimated = Column("tokens_estimated")
         public static let durationMs = Column("duration_ms")
+        public static let backend = Column("backend")
+        public static let providerId = Column("provider_id")
+        public static let model = Column("model")
+        public static let routeReason = Column("route_reason")
     }
 
     public func encode(to container: inout PersistenceContainer) throws {
@@ -102,6 +120,10 @@ extension Message: FetchableRecord, PersistableRecord, TableRecord {
         container[Columns.createdAt] = Int64(createdAt.timeIntervalSince1970 * 1000)
         container[Columns.status] = status.rawValue
         container[Columns.error] = error
+        container[Columns.backend] = backend?.rawValue
+        container[Columns.providerId] = providerId
+        container[Columns.model] = model
+        container[Columns.routeReason] = routeReason
 
         if let stats = stats {
             container[Columns.tokens] = stats.tokens
@@ -127,6 +149,11 @@ extension Message: FetchableRecord, PersistableRecord, TableRecord {
         let statusRaw: String = row[Columns.status]
         status = MessageStatus(rawValue: statusRaw) ?? .done
         error = row[Columns.error]
+        let backendRaw: String? = row[Columns.backend]
+        backend = backendRaw.flatMap(BackendKind.init(rawValue:))
+        providerId = row[Columns.providerId]
+        model = row[Columns.model]
+        routeReason = row[Columns.routeReason]
 
         if let tokens: Int = row[Columns.tokens] {
             let estimated: Int? = row[Columns.tokensEstimated]

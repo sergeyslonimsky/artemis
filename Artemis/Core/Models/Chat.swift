@@ -16,6 +16,8 @@ public struct Chat: Identifiable, Codable, Equatable, Sendable {
     /// Provider/model last selected in this chat. `nil` falls back to the app defaults.
     public var providerId: String?
     public var model: String?
+    /// `nil` follows `AppSettings.routingMode`.
+    public var routingMode: RoutingMode?
 
     public init(
         id: String = UUID().uuidString.lowercased(),
@@ -24,7 +26,8 @@ public struct Chat: Identifiable, Codable, Equatable, Sendable {
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         providerId: String? = nil,
-        model: String? = nil
+        model: String? = nil,
+        routingMode: RoutingMode? = nil
     ) {
         self.id = id
         self.title = title
@@ -33,6 +36,7 @@ public struct Chat: Identifiable, Codable, Equatable, Sendable {
         self.updatedAt = updatedAt
         self.providerId = providerId
         self.model = model
+        self.routingMode = routingMode
     }
 }
 
@@ -48,6 +52,7 @@ extension Chat: FetchableRecord, PersistableRecord, TableRecord {
         public static let updatedAt = Column("updated_at")
         public static let providerId = Column("provider_id")
         public static let model = Column("model")
+        public static let routingMode = Column("routing_mode")
     }
 
     public func encode(to container: inout PersistenceContainer) throws {
@@ -58,6 +63,7 @@ extension Chat: FetchableRecord, PersistableRecord, TableRecord {
         container[Columns.updatedAt] = Int64(updatedAt.timeIntervalSince1970 * 1000)
         container[Columns.providerId] = providerId
         container[Columns.model] = model
+        container[Columns.routingMode] = routingMode?.rawValue
     }
 
     public init(row: Row) throws {
@@ -71,5 +77,7 @@ extension Chat: FetchableRecord, PersistableRecord, TableRecord {
         updatedAt = Date(timeIntervalSince1970: TimeInterval(updatedMillis) / 1000.0)
         providerId = row[Columns.providerId]
         model = row[Columns.model]
+        let modeRaw: String? = row[Columns.routingMode]
+        routingMode = modeRaw.flatMap(RoutingMode.init(rawValue:))
     }
 }

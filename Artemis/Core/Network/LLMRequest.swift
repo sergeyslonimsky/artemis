@@ -1,21 +1,25 @@
 import Foundation
+import UniformTypeIdentifiers
 
 public struct LLMRequest: Sendable {
     public var model: String
     public var messages: [Message]
     public var systemPrompt: String?
     public var preset: Preset?
+    public var capabilities: ProviderCapabilities
 
     public init(
         model: String,
         messages: [Message],
         systemPrompt: String? = nil,
-        preset: Preset? = nil
+        preset: Preset? = nil,
+        capabilities: ProviderCapabilities = ProviderKind.custom.capabilities
     ) {
         self.model = model
         self.messages = messages
         self.systemPrompt = systemPrompt
         self.preset = preset
+        self.capabilities = capabilities
     }
 
     public func encodeToJSONData() throws -> Data {
@@ -36,14 +40,8 @@ public struct LLMRequest: Sendable {
                     parts.append(WireContentPart(type: "text", text: msg.content))
                 }
                 for att in msg.attachments {
-                    if let data = att.data {
-                        let base64 = data.base64EncodedString()
-                        let dataUrl = "data:\(att.mime);base64,\(base64)"
-                        if att.kind == .document {
-                            parts.append(WireContentPart(type: "file", file: .init(filename: att.filename, fileData: dataUrl)))
-                        } else {
-                            parts.append(WireContentPart(type: "image_url", imageUrl: .init(url: dataUrl)))
-                        }
+                    if let part = try wirePart(for: att) {
+                        parts.append(part)
                     }
                 }
                 content = .parts(parts)
@@ -55,7 +53,7 @@ public struct LLMRequest: Sendable {
             model: model,
             messages: wireMessages,
             stream: true,
-            streamOptions: .init(includeUsage: true),
+            streamOptions: capabilities.supportsStreamUsage ? .init(includeUsage: true) : nil,
             temperature: preset?.temperature,
             topP: preset?.topP,
             frequencyPenalty: preset?.frequencyPenalty,
@@ -63,6 +61,50 @@ public struct LLMRequest: Sendable {
         )
 
         return try JSONEncoder().encode(wire)
+    }
+
+    /// Text documents are inlined (works everywhere); binary ones need `file` part support.
+    private func wirePart(for attachment: Attachment) throws -> WireContentPart? {
+        guard let data = attachment.data else { return nil }
+
+        if attachment.kind == .image {
+            guard capabilities.supportsImages else {
+                throw LLMRequestError.unsupportedAttachment(attachment.filename, reason: "this provider does not accept images")
+            }
+            return WireContentPart(type: "image_url", imageUrl: .init(url: Self.dataURL(attachment, data)))
+        }
+
+        if Self.isTextDocument(attachment), let text = String(data: data, encoding: .utf8) {
+            return WireContentPart(type: "text", text: "File: \(attachment.filename)\n```\n\(text)\n```")
+        }
+
+        guard capabilities.supportsFileParts else {
+            throw LLMRequestError.unsupportedAttachment(attachment.filename, reason: "this provider does not accept file attachments")
+        }
+        return WireContentPart(
+            type: "file",
+            file: .init(filename: attachment.filename, fileData: Self.dataURL(attachment, data))
+        )
+    }
+
+    private static func dataURL(_ attachment: Attachment, _ data: Data) -> String {
+        "data:\(attachment.mime);base64,\(data.base64EncodedString())"
+    }
+
+    private static func isTextDocument(_ attachment: Attachment) -> Bool {
+        guard let type = UTType(mimeType: attachment.mime) else { return false }
+        return type.conforms(to: .text) || type.conforms(to: .json) || type.conforms(to: .xml)
+    }
+}
+
+public enum LLMRequestError: LocalizedError {
+    case unsupportedAttachment(String, reason: String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .unsupportedAttachment(let filename, let reason):
+            "Can't send \(filename): \(reason)."
+        }
     }
 }
 

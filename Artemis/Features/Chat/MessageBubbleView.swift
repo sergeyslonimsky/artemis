@@ -5,6 +5,8 @@ public struct MessageBubbleView: View {
     public let message: Message
     /// Live text from `ChatService` while the reply is generated.
     public var live: ChatRunState?
+    /// Display name of `message.providerId`, if the provider still exists.
+    public var providerName: String?
     public var onRegenerate: (() -> Void)?
 
     @State private var copied: Bool = false
@@ -12,10 +14,12 @@ public struct MessageBubbleView: View {
     public init(
         message: Message,
         live: ChatRunState? = nil,
+        providerName: String? = nil,
         onRegenerate: (() -> Void)? = nil
     ) {
         self.message = message
         self.live = live
+        self.providerName = providerName
         self.onRegenerate = onRegenerate
     }
 
@@ -104,6 +108,10 @@ public struct MessageBubbleView: View {
                 errorBanner
             }
 
+            if let backend = message.backend {
+                BackendBadge(kind: backend, providerName: providerName, model: message.model)
+            }
+
             if !isStreaming {
                 footer
             }
@@ -184,6 +192,41 @@ public struct MessageBubbleView: View {
         }
         .padding(.top, 4)
     }
+}
+
+// MARK: - Backend Badge
+
+/// Shows who generated a reply: the on-device model or a cloud provider and model.
+struct BackendBadge: View {
+    let kind: BackendKind
+    let providerName: String?
+    let model: String?
+
+    var body: some View {
+        Label(title, systemImage: kind == .onDevice ? "iphone" : "cloud")
+            .font(.caption2.weight(.medium))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Color.secondary.opacity(0.12))
+            .clipShape(Capsule())
+            .accessibilityLabel(kind == .onDevice ? "Answered on device" : "Answered by \(title)")
+    }
+
+    private var title: String {
+        switch kind {
+        case .onDevice:
+            return "On-device"
+        case .cloud:
+            return [providerName, model].compactMap { $0 }.joined(separator: " · ").nonEmpty ?? "Cloud"
+        }
+    }
+}
+
+private extension String {
+    var nonEmpty: String? { isEmpty ? nil : self }
 }
 
 // MARK: - Streaming Markdown

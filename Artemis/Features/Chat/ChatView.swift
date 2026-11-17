@@ -41,6 +41,7 @@ public struct ChatView: View {
                             MessageBubbleView(
                                 message: msg,
                                 live: chatService.liveState(chatId: chatId, messageId: msg.id),
+                                providerName: providers.first { $0.id == msg.providerId }?.name,
                                 onRegenerate: msg.role == .assistant && !isBusy ? { regenerate(from: msg) } : nil
                             )
                         }

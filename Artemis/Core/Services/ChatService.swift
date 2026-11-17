@@ -60,7 +60,7 @@ public final class ChatService {
         cancel(chatId: chatId)
         let userMessage = Message(chatId: chatId, role: .user, content: content, attachments: attachments)
         try database.addMessage(userMessage)
-        try generateReply(chatId: chatId, provider: provider, model: model, preset: preset)
+        try generateReply(chatId: chatId, backend: cloudBackend(provider: provider, model: model), preset: preset)
     }
 
     /// Drops `messageId` and everything after it, then generates a fresh reply to the remaining history.
@@ -73,15 +73,26 @@ public final class ChatService {
     ) throws {
         cancel(chatId: chatId)
         try database.deleteMessagesFrom(chatId: chatId, messageId: messageId)
-        try generateReply(chatId: chatId, provider: provider, model: model, preset: preset)
+        try generateReply(chatId: chatId, backend: cloudBackend(provider: provider, model: model), preset: preset)
+    }
+
+    private func cloudBackend(provider: Provider, model: String) -> OpenAICompatibleBackend {
+        OpenAICompatibleBackend(provider: provider, apiKey: database.apiKey(providerId: provider.id), model: model)
     }
 
     // MARK: - Generation
 
-    private func generateReply(chatId: String, provider: Provider, model: String, preset: Preset?) throws {
-        let placeholder = try database.addMessage(
-            Message(chatId: chatId, role: .assistant, content: "", status: .streaming)
-        )
+    private func generateReply(chatId: String, backend: any ChatBackend, preset: Preset?) throws {
+        let descriptor = backend.descriptor
+        let placeholder = try database.addMessage(Message(
+            chatId: chatId,
+            role: .assistant,
+            content: "",
+            status: .streaming,
+            backend: descriptor.kind,
+            providerId: descriptor.providerId,
+            model: descriptor.model
+        ))
 
         let token = UUID()
         runs[chatId] = ChatRunState(token: token, messageId: placeholder.id)
@@ -91,9 +102,7 @@ public final class ChatService {
             database: database,
             chatId: chatId,
             messageId: placeholder.id,
-            provider: provider,
-            apiKey: database.apiKey(providerId: provider.id),
-            model: model,
+            backend: backend,
             preset: preset
         )
 
@@ -120,14 +129,12 @@ public final class ChatService {
 
         guard outcome.status == .done else { return }
         let autoTitling = autoTitling
-        let client = LLMClient(baseUrl: job.provider.baseUrl, apiKey: job.apiKey)
         Task {
             await autoTitling.generateTitleIfNeeded(
                 chatId: chatId,
                 userPrompt: outcome.lastUserPrompt,
                 assistantReply: outcome.content,
-                client: client,
-                model: job.model
+                backend: job.backend
             )
         }
     }
@@ -167,9 +174,7 @@ struct ReplyJob: Sendable {
     let database: AppDatabase
     let chatId: String
     let messageId: String
-    let provider: Provider
-    let apiKey: String
-    let model: String
+    let backend: any ChatBackend
     let preset: Preset?
 
     private static let logger = Logger(subsystem: "com.artemis.ios", category: "ReplyJob")
@@ -185,15 +190,9 @@ struct ReplyJob: Sendable {
             outcome.lastUserPrompt = history.last(where: { $0.role == .user })?.content ?? ""
 
             let settings = try database.fetchSettings()
-            let client = LLMClient(baseUrl: provider.baseUrl, apiKey: apiKey)
-            let request = LLMRequest(
-                model: model,
-                messages: history,
-                systemPrompt: settings.systemPrompt,
-                preset: preset
-            )
+            let turn = ChatTurn(messages: history, systemPrompt: settings.systemPrompt, preset: preset)
 
-            for try await event in client.stream(request: request) {
+            for try await event in backend.stream(turn) {
                 try Task.checkCancellation()
                 switch event {
                 case .content(let delta):
@@ -208,7 +207,7 @@ struct ReplyJob: Sendable {
                     throw ReplyError.provider(message)
                 }
             }
-            // LLMClient ends the stream quietly when cancelled.
+            // Backends may end the stream quietly when cancelled.
             try Task.checkCancellation()
 
             if outcome.content.isEmpty && outcome.reasoning.isEmpty {
