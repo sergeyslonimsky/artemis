@@ -1,6 +1,18 @@
 import Foundation
 import UIKit
+import os
 
+/// Live state of an assistant reply that is being generated.
+public struct ChatRunState: Equatable, Sendable {
+    public let token: UUID
+    public let messageId: String
+    public var content: String = ""
+    public var reasoning: String = ""
+    public var isActive: Bool = true
+}
+
+/// Owns reply generation. Generation outlives any particular `ChatView`: views observe
+/// `runs` for live text and the database for everything else.
 @MainActor
 @Observable
 public final class ChatService {
@@ -8,10 +20,13 @@ public final class ChatService {
 
     private let database: AppDatabase
     private let autoTitling: AutoTitlingService
-    private var activeTasks: [String: Task<Void, Never>] = [:]
 
-    /// Tracks which chats are currently generating: [chatId: isBusy]
-    public private(set) var runningChats: Set<String> = []
+    /// Latest run per chat. Kept after completion (with `isActive == false`) until the next run,
+    /// so the bubble never flashes empty while the database observation catches up.
+    public private(set) var runs: [String: ChatRunState] = [:]
+
+    @ObservationIgnored private var tasks: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var backgroundTasks: [String: UIBackgroundTaskIdentifier] = [:]
 
     public init(database: AppDatabase = .shared) {
         self.database = database
@@ -19,152 +34,234 @@ public final class ChatService {
     }
 
     public func isRunning(chatId: String) -> Bool {
-        runningChats.contains(chatId)
+        runs[chatId]?.isActive == true
     }
 
+    /// Live text for `messageId` while it is being generated.
+    public func liveState(chatId: String, messageId: String) -> ChatRunState? {
+        guard let run = runs[chatId], run.messageId == messageId else { return nil }
+        return run
+    }
+
+    /// Stops generation. The partial reply is kept and marked cancelled.
     public func cancel(chatId: String) {
-        activeTasks[chatId]?.cancel()
-        activeTasks.removeValue(forKey: chatId)
-        runningChats.remove(chatId)
+        tasks[chatId]?.cancel()
     }
 
+    /// Appends the user's message and starts generating a reply.
     public func send(
         chatId: String,
         content: String,
         attachments: [Attachment] = [],
         provider: Provider,
         model: String,
-        preset: Preset? = nil,
-        onDelta: @escaping @MainActor (String, String) -> Void,
-        onComplete: @escaping @MainActor (Result<Message, Error>) -> Void
-    ) {
-        // Cancel any in-flight stream for this chat
+        preset: Preset? = nil
+    ) throws {
         cancel(chatId: chatId)
-        runningChats.insert(chatId)
+        let userMessage = Message(chatId: chatId, role: .user, content: content, attachments: attachments)
+        try database.addMessage(userMessage)
+        try generateReply(chatId: chatId, provider: provider, model: model, preset: preset)
+    }
 
-        let task = Task {
-            var backgroundTaskID = UIBackgroundTaskIdentifier.invalid
-            backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "ArtemisStream-\(chatId)") {
-                Task { @MainActor in
-                    if backgroundTaskID != .invalid {
-                        UIApplication.shared.endBackgroundTask(backgroundTaskID)
-                        backgroundTaskID = .invalid
-                    }
+    /// Drops `messageId` and everything after it, then generates a fresh reply to the remaining history.
+    public func regenerate(
+        chatId: String,
+        fromMessageId messageId: String,
+        provider: Provider,
+        model: String,
+        preset: Preset? = nil
+    ) throws {
+        cancel(chatId: chatId)
+        try database.deleteMessagesFrom(chatId: chatId, messageId: messageId)
+        try generateReply(chatId: chatId, provider: provider, model: model, preset: preset)
+    }
+
+    // MARK: - Generation
+
+    private func generateReply(chatId: String, provider: Provider, model: String, preset: Preset?) throws {
+        let placeholder = try database.addMessage(
+            Message(chatId: chatId, role: .assistant, content: "", status: .streaming)
+        )
+
+        let token = UUID()
+        runs[chatId] = ChatRunState(token: token, messageId: placeholder.id)
+        beginBackgroundTask(chatId: chatId)
+
+        let job = ReplyJob(
+            database: database,
+            chatId: chatId,
+            messageId: placeholder.id,
+            provider: provider,
+            apiKey: database.apiKey(providerId: provider.id),
+            model: model,
+            preset: preset
+        )
+
+        tasks[chatId] = Task { [weak self] in
+            let outcome = await job.run { [weak self] batch in
+                await self?.apply(batch, chatId: chatId, token: token)
+            }
+            self?.finish(chatId: chatId, token: token, job: job, outcome: outcome)
+        }
+    }
+
+    private func apply(_ batch: StreamBatcher.Batch, chatId: String, token: UUID) {
+        guard runs[chatId]?.token == token else { return }
+        runs[chatId]?.content += batch.content
+        runs[chatId]?.reasoning += batch.reasoning
+    }
+
+    private func finish(chatId: String, token: UUID, job: ReplyJob, outcome: ReplyJob.Outcome) {
+        // A newer run may have replaced this one (send right after cancel); leave it alone.
+        guard runs[chatId]?.token == token else { return }
+        runs[chatId]?.isActive = false
+        tasks.removeValue(forKey: chatId)
+        endBackgroundTask(chatId: chatId)
+
+        guard outcome.status == .done else { return }
+        let autoTitling = autoTitling
+        let client = LLMClient(baseUrl: job.provider.baseUrl, apiKey: job.apiKey)
+        Task {
+            await autoTitling.generateTitleIfNeeded(
+                chatId: chatId,
+                userPrompt: outcome.lastUserPrompt,
+                assistantReply: outcome.content,
+                client: client,
+                model: job.model
+            )
+        }
+    }
+
+    // MARK: - Background execution
+
+    private func beginBackgroundTask(chatId: String) {
+        endBackgroundTask(chatId: chatId)
+        backgroundTasks[chatId] = UIApplication.shared.beginBackgroundTask(withName: "ArtemisStream-\(chatId)") { [weak self] in
+            // Expiration handlers run on the main thread.
+            MainActor.assumeIsolated {
+                self?.endBackgroundTask(chatId: chatId)
+            }
+        }
+    }
+
+    private func endBackgroundTask(chatId: String) {
+        guard let id = backgroundTasks.removeValue(forKey: chatId), id != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(id)
+    }
+}
+
+// MARK: - Reply job
+
+/// One assistant reply: reads history, streams from the provider and persists the result.
+/// Runs off the main actor; UI updates go through `onBatch`.
+struct ReplyJob: Sendable {
+    struct Outcome: Sendable {
+        var content = ""
+        var reasoning = ""
+        var status: MessageStatus = .done
+        var error: String?
+        var stats: MessageStats?
+        var lastUserPrompt = ""
+    }
+
+    let database: AppDatabase
+    let chatId: String
+    let messageId: String
+    let provider: Provider
+    let apiKey: String
+    let model: String
+    let preset: Preset?
+
+    private static let logger = Logger(subsystem: "com.artemis.ios", category: "ReplyJob")
+
+    @concurrent
+    func run(onBatch: @escaping @Sendable (StreamBatcher.Batch) async -> Void) async -> Outcome {
+        var outcome = Outcome()
+        var batcher = StreamBatcher()
+
+        do {
+            let history = try database.fetchMessages(chatId: chatId, includeAttachmentData: true)
+                .filter { $0.id != messageId && Self.belongsInContext($0) }
+            outcome.lastUserPrompt = history.last(where: { $0.role == .user })?.content ?? ""
+
+            let settings = try database.fetchSettings()
+            let client = LLMClient(baseUrl: provider.baseUrl, apiKey: apiKey)
+            let request = LLMRequest(
+                model: model,
+                messages: history,
+                systemPrompt: settings.systemPrompt,
+                preset: preset
+            )
+
+            for try await event in client.stream(request: request) {
+                try Task.checkCancellation()
+                switch event {
+                case .content(let delta):
+                    outcome.content += delta
+                    if let batch = batcher.append(content: delta) { await onBatch(batch) }
+                case .reasoning(let delta):
+                    outcome.reasoning += delta
+                    if let batch = batcher.append(reasoning: delta) { await onBatch(batch) }
+                case .done(let tokens, let isEstimated, let durationMs):
+                    outcome.stats = MessageStats(tokens: tokens, isEstimated: isEstimated, durationMs: durationMs)
+                case .error(let message):
+                    throw ReplyError.provider(message)
                 }
             }
+            // LLMClient ends the stream quietly when cancelled.
+            try Task.checkCancellation()
 
-            defer {
-                Task { @MainActor in
-                    self.runningChats.remove(chatId)
-                    self.activeTasks.removeValue(forKey: chatId)
-                    if backgroundTaskID != .invalid {
-                        UIApplication.shared.endBackgroundTask(backgroundTaskID)
-                    }
-                }
+            if outcome.content.isEmpty && outcome.reasoning.isEmpty {
+                throw ReplyError.emptyResponse
             }
-
-            do {
-                // 1. Add user message
-                let userMessage = Message(
-                    chatId: chatId,
-                    role: .user,
-                    content: content,
-                    attachments: attachments
-                )
-                try database.addMessage(userMessage)
-
-                // 2. Prepare assistant placeholder
-                let assistantId = UUID().uuidString.lowercased()
-                let assistantPlaceholder = Message(
-                    id: assistantId,
-                    chatId: chatId,
-                    role: .assistant,
-                    content: "",
-                    reasoning: ""
-                )
-                try database.addMessage(assistantPlaceholder)
-
-                // 3. Read conversation history
-                let history = try database.fetchMessages(chatId: chatId).filter { $0.id != assistantId }
-                let settings = try database.fetchSettings()
-
-                let client = LLMClient(baseUrl: provider.baseUrl, apiKey: provider.apiKey)
-                let request = LLMRequest(
-                    model: model,
-                    messages: history,
-                    systemPrompt: settings.systemPrompt,
-                    preset: preset
-                )
-
-                var accumulatedContent = ""
-                var accumulatedReasoning = ""
-
-                let batcher = StreamBatcher(flushInterval: 0.050) { c, r in
-                    Task { @MainActor in
-                        onDelta(c, r)
-                    }
-                }
-
-                var finalStats: MessageStats?
-
-                for try await event in client.stream(request: request) {
-                    if Task.isCancelled { break }
-
-                    switch event {
-                    case .content(let delta):
-                        accumulatedContent += delta
-                        await batcher.appendContent(delta)
-
-                    case .reasoning(let delta):
-                        accumulatedReasoning += delta
-                        await batcher.appendReasoning(delta)
-
-                    case .done(let tokens, let isEstimated, let durationMs):
-                        await batcher.flush()
-                        finalStats = MessageStats(tokens: tokens, isEstimated: isEstimated, durationMs: durationMs)
-
-                    case .error(let errorMsg):
-                        await batcher.flush()
-                        throw NSError(domain: "ChatService", code: 1, userInfo: [NSLocalizedDescriptionKey: errorMsg])
-                    }
-                }
-
-                await batcher.flush()
-
-                // 4. Record finished message in database
-                try database.finishMessage(
-                    id: assistantId,
-                    content: accumulatedContent,
-                    reasoning: accumulatedReasoning,
-                    stats: finalStats
-                )
-
-                let finishedMessage = Message(
-                    id: assistantId,
-                    chatId: chatId,
-                    role: .assistant,
-                    content: accumulatedContent,
-                    reasoning: accumulatedReasoning,
-                    stats: finalStats
-                )
-
-                // 5. Trigger auto-titling in background
-                Task {
-                    await self.autoTitling.generateTitleIfNeeded(
-                        chatId: chatId,
-                        userPrompt: content,
-                        assistantReply: accumulatedContent,
-                        client: client,
-                        model: model
-                    )
-                }
-
-                onComplete(.success(finishedMessage))
-            } catch {
-                onComplete(.failure(error))
+        } catch {
+            if Task.isCancelled || error is CancellationError {
+                outcome.status = .cancelled
+            } else {
+                outcome.status = .failed
+                outcome.error = error.localizedDescription
             }
         }
 
-        activeTasks[chatId] = task
+        if let batch = batcher.drain() { await onBatch(batch) }
+
+        do {
+            try database.finishMessage(
+                id: messageId,
+                content: outcome.content,
+                reasoning: outcome.reasoning,
+                status: outcome.status,
+                error: outcome.error,
+                stats: outcome.stats
+            )
+        } catch {
+            Self.logger.error("Failed to persist reply \(messageId, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+        return outcome
+    }
+
+    /// Failed or empty assistant turns carry no useful context for the model.
+    private static func belongsInContext(_ message: Message) -> Bool {
+        guard message.role == .assistant else { return true }
+        switch message.status {
+        case .done, .cancelled:
+            return !message.content.isEmpty
+        case .failed, .streaming:
+            return false
+        }
+    }
+}
+
+enum ReplyError: LocalizedError {
+    case provider(String)
+    case emptyResponse
+
+    var errorDescription: String? {
+        switch self {
+        case .provider(let message):
+            return message
+        case .emptyResponse:
+            return "The model returned an empty response."
+        }
     }
 }

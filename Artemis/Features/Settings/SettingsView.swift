@@ -9,6 +9,7 @@ public struct SettingsView: View {
 
     @State private var showingAddProvider: Bool = false
     @State private var providerToEdit: Provider?
+    @State private var saveError: String?
 
     private let database = AppDatabase.shared
 
@@ -73,8 +74,8 @@ public struct SettingsView: View {
                 }
             }
             .sheet(isPresented: $showingAddProvider) {
-                ProviderEditView(provider: nil) { newProvider in
-                    try? database.saveProvider(newProvider)
+                ProviderEditView(provider: nil, apiKey: "") { newProvider, apiKey in
+                    saveProvider(newProvider, apiKey: apiKey)
                     if providers.isEmpty {
                         settings.defaultProviderId = newProvider.id
                         try? database.saveSettings(settings)
@@ -83,13 +84,21 @@ public struct SettingsView: View {
                 }
             }
             .sheet(item: $providerToEdit) { provider in
-                ProviderEditView(provider: provider) { updated in
-                    try? database.saveProvider(updated)
+                ProviderEditView(provider: provider, apiKey: database.apiKey(providerId: provider.id)) { updated, apiKey in
+                    saveProvider(updated, apiKey: apiKey)
                     loadData()
                 }
             }
             .onAppear {
                 loadData()
+            }
+            .alert(
+                "Couldn't save provider",
+                isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } })
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(saveError ?? "")
             }
         }
     }
@@ -98,6 +107,14 @@ public struct SettingsView: View {
         providers = (try? database.fetchProviders()) ?? []
         presets = (try? database.fetchPresets()) ?? []
         settings = (try? database.fetchSettings()) ?? AppSettings()
+    }
+
+    private func saveProvider(_ provider: Provider, apiKey: String) {
+        do {
+            try database.saveProvider(provider, apiKey: apiKey)
+        } catch {
+            saveError = error.localizedDescription
+        }
     }
 
     private func deleteProvider(at offsets: IndexSet) {
@@ -127,13 +144,15 @@ struct ProviderEditView: View {
     @State private var testSuccess: Bool = false
 
     let existingId: String?
-    let onSave: (Provider) -> Void
+    let existingCreatedAt: Date?
+    let onSave: (Provider, String) -> Void
 
-    init(provider: Provider?, onSave: @escaping (Provider) -> Void) {
+    init(provider: Provider?, apiKey: String, onSave: @escaping (Provider, String) -> Void) {
         self.existingId = provider?.id
+        self.existingCreatedAt = provider?.createdAt
         self._name = State(initialValue: provider?.name ?? "")
         self._baseUrl = State(initialValue: provider?.baseUrl ?? "https://api.openai.com/v1")
-        self._apiKey = State(initialValue: provider?.apiKey ?? "")
+        self._apiKey = State(initialValue: apiKey)
         self._models = State(initialValue: provider?.models ?? [])
         self._defaultModel = State(initialValue: provider?.defaultModel ?? "")
         self.onSave = onSave
@@ -199,11 +218,11 @@ struct ProviderEditView: View {
                             id: existingId ?? UUID().uuidString.lowercased(),
                             name: name.isEmpty ? "Provider" : name,
                             baseUrl: baseUrl,
-                            apiKey: apiKey,
                             models: models,
-                            defaultModel: defaultModel.isEmpty ? (models.first ?? "") : defaultModel
+                            defaultModel: defaultModel.isEmpty ? (models.first ?? "") : defaultModel,
+                            createdAt: existingCreatedAt ?? Date()
                         )
-                        onSave(provider)
+                        onSave(provider, apiKey)
                         dismiss()
                     }
                     .disabled(name.isEmpty || baseUrl.isEmpty)

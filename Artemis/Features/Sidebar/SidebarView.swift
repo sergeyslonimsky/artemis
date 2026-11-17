@@ -1,4 +1,5 @@
 import SwiftUI
+import os
 
 public struct SidebarView: View {
     @Binding public var selectedChatId: String?
@@ -14,6 +15,7 @@ public struct SidebarView: View {
 
     private let database = AppDatabase.shared
     private let chatService = ChatService.shared
+    private static let logger = Logger(subsystem: "com.artemis.ios", category: "SidebarView")
 
     public init(
         selectedChatId: Binding<String?>,
@@ -89,7 +91,7 @@ public struct SidebarView: View {
                                         .foregroundStyle(selectedChatId == chat.id ? Color.accentColor : Color.primary)
                                         .lineLimit(1)
 
-                                    Text(timeAgo(chat.updatedAt))
+                                    Text(chat.updatedAt, format: .relative(presentation: .named, unitsStyle: .abbreviated))
                                         .font(.caption2)
                                         .foregroundStyle(.tertiary)
                                 }
@@ -155,37 +157,48 @@ public struct SidebarView: View {
             Button("Save") {
                 if let chat = chatToRename, !renameText.isEmpty {
                     try? database.renameChat(chatId: chat.id, title: renameText)
-                    loadChats()
                 }
             }
         }
-        .onAppear {
-            loadChats()
+        .task {
+            await observeChats()
         }
     }
 
-    private func loadChats() {
-        chats = (try? database.fetchChats()) ?? []
+    private func observeChats() async {
+        do {
+            for try await value in database.observeChats() {
+                chats = value
+                if !searchQuery.isEmpty {
+                    performSearch(searchQuery)
+                }
+            }
+        } catch {
+            Self.logger.error("Chats observation failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private func createNewChat() {
         do {
             let newChat = try database.createChat(title: "New Chat", source: .placeholder)
-            loadChats()
             selectedChatId = newChat.id
             onSelectChat?(newChat.id)
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         } catch {
-            print("Failed to create chat: \(error)")
+            Self.logger.error("Failed to create chat: \(error.localizedDescription, privacy: .public)")
         }
     }
 
     private func deleteChat(_ chat: Chat) {
-        try? database.deleteChat(id: chat.id)
+        chatService.cancel(chatId: chat.id)
+        do {
+            try database.deleteChat(id: chat.id)
+        } catch {
+            Self.logger.error("Failed to delete chat: \(error.localizedDescription, privacy: .public)")
+        }
         if selectedChatId == chat.id {
             selectedChatId = nil
         }
-        loadChats()
     }
 
     private func performSearch(_ query: String) {
@@ -194,11 +207,5 @@ public struct SidebarView: View {
             return
         }
         searchHits = (try? database.search(query: query)) ?? []
-    }
-
-    private func timeAgo(_ date: Date) -> String {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .short
-        return formatter.localizedString(for: date, relativeTo: Date())
     }
 }

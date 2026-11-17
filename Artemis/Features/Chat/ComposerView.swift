@@ -14,6 +14,7 @@ public struct ComposerView: View {
 
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
     @State private var isShowingFileImporter: Bool = false
+    @State private var isShowingPhotoPicker: Bool = false
     @FocusState private var isFocused: Bool
 
     public init(
@@ -98,11 +99,10 @@ public struct ComposerView: View {
             HStack(alignment: .bottom, spacing: 10) {
                 // Attach menu (Photos / Files)
                 Menu {
-                    PhotosPicker(
-                        selection: $selectedPhotoItems,
-                        maxSelectionCount: 5,
-                        matching: .images
-                    ) {
+                    // A PhotosPicker nested in a Menu never presents; drive it from state instead.
+                    Button {
+                        isShowingPhotoPicker = true
+                    } label: {
                         Label("Photo Library", systemImage: "photo.on.rectangle")
                     }
 
@@ -165,11 +165,17 @@ public struct ComposerView: View {
         .padding(.bottom, 6)
         .fileImporter(
             isPresented: $isShowingFileImporter,
-            allowedContentTypes: [.pdf, .plainText, .data],
+            allowedContentTypes: [.pdf, .text, .image, .data],
             allowsMultipleSelection: true
         ) { result in
             handleFileImport(result)
         }
+        .photosPicker(
+            isPresented: $isShowingPhotoPicker,
+            selection: $selectedPhotoItems,
+            maxSelectionCount: 5,
+            matching: .images
+        )
         .onChange(of: selectedPhotoItems) { _, items in
             handlePhotoSelection(items)
         }
@@ -177,41 +183,34 @@ public struct ComposerView: View {
 
     private func handleFileImport(_ result: Result<[URL], Error>) {
         guard case .success(let urls) = result else { return }
-        for url in urls {
-            guard url.startAccessingSecurityScopedResource() else { continue }
-            defer { url.stopAccessingSecurityScopedResource() }
-            if let data = try? Data(contentsOf: url) {
-                let attachment = Attachment(
-                    filename: url.lastPathComponent,
-                    mime: "application/pdf",
-                    kind: .document,
-                    size: data.count,
-                    data: data
-                )
-                attachments.append(attachment)
+        Task {
+            for url in urls {
+                let attachment = await Task.detached(priority: .userInitiated) { () -> Attachment? in
+                    let accessing = url.startAccessingSecurityScopedResource()
+                    defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+                    guard let data = try? Data(contentsOf: url) else { return nil }
+                    return try? AttachmentProcessor.fileAttachment(from: data, filename: url.lastPathComponent)
+                }.value
+                if let attachment {
+                    attachments.append(attachment)
+                }
             }
         }
     }
 
     private func handlePhotoSelection(_ items: [PhotosPickerItem]) {
+        guard !items.isEmpty else { return }
         Task {
             for item in items {
-                if let data = try? await item.loadTransferable(type: Data.self) {
-                    let attachment = Attachment(
-                        filename: "image-\(UUID().uuidString.prefix(6)).jpg",
-                        mime: "image/jpeg",
-                        kind: .image,
-                        size: data.count,
-                        data: data
-                    )
-                    await MainActor.run {
-                        attachments.append(attachment)
-                    }
+                guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
+                let attachment = await Task.detached(priority: .userInitiated) {
+                    try? AttachmentProcessor.imageAttachment(from: data)
+                }.value
+                if let attachment {
+                    attachments.append(attachment)
                 }
             }
-            await MainActor.run {
-                selectedPhotoItems.removeAll()
-            }
+            selectedPhotoItems.removeAll()
         }
     }
 }

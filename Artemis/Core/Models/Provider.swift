@@ -1,11 +1,12 @@
 import Foundation
 import GRDB
 
+/// An OpenAI-compatible endpoint. The API key is not part of the record:
+/// it lives in the Keychain, see `APIKeyStore`.
 public struct Provider: Identifiable, Codable, Equatable, Sendable {
     public var id: String
     public var name: String
     public var baseUrl: String
-    public var apiKey: String
     public var models: [String]
     public var defaultModel: String
     public var createdAt: Date
@@ -15,7 +16,6 @@ public struct Provider: Identifiable, Codable, Equatable, Sendable {
         id: String = UUID().uuidString.lowercased(),
         name: String,
         baseUrl: String,
-        apiKey: String = "",
         models: [String] = [],
         defaultModel: String = "",
         createdAt: Date = Date(),
@@ -24,7 +24,6 @@ public struct Provider: Identifiable, Codable, Equatable, Sendable {
         self.id = id
         self.name = name
         self.baseUrl = baseUrl
-        self.apiKey = apiKey
         self.models = models
         self.defaultModel = defaultModel.isEmpty ? (models.first ?? "") : defaultModel
         self.createdAt = createdAt
@@ -40,7 +39,6 @@ extension Provider: FetchableRecord, PersistableRecord, TableRecord {
         public static let id = Column(CodingKeys.id)
         public static let name = Column(CodingKeys.name)
         public static let baseUrl = Column("base_url")
-        public static let apiKey = Column("api_key")
         public static let models = Column(CodingKeys.models)
         public static let defaultModel = Column("default_model")
         public static let createdAt = Column("created_at")
@@ -51,7 +49,6 @@ extension Provider: FetchableRecord, PersistableRecord, TableRecord {
         container[Columns.id] = id
         container[Columns.name] = name
         container[Columns.baseUrl] = baseUrl
-        container[Columns.apiKey] = apiKey
         let data = try JSONEncoder().encode(models)
         let jsonString = String(data: data, encoding: .utf8) ?? "[]"
         container[Columns.models] = jsonString
@@ -64,7 +61,6 @@ extension Provider: FetchableRecord, PersistableRecord, TableRecord {
         id = row[Columns.id]
         name = row[Columns.name]
         baseUrl = row[Columns.baseUrl]
-        apiKey = row[Columns.apiKey]
         let jsonString: String = row[Columns.models]
         if let data = jsonString.data(using: .utf8),
            let decoded = try? JSONDecoder().decode([String].self, from: data) {

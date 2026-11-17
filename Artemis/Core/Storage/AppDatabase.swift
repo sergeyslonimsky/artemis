@@ -4,9 +4,15 @@ import GRDB
 public final class AppDatabase: Sendable {
     public let dbWriter: any DatabaseWriter
     public let attachmentsDirectory: URL
+    public let apiKeys: any APIKeyStore
 
-    public init(_ dbWriter: any DatabaseWriter, attachmentsDirectory: URL? = nil) throws {
+    public init(
+        _ dbWriter: any DatabaseWriter,
+        attachmentsDirectory: URL? = nil,
+        apiKeys: any APIKeyStore = KeychainAPIKeyStore()
+    ) throws {
         self.dbWriter = dbWriter
+        self.apiKeys = apiKeys
 
         if let attachmentsDirectory = attachmentsDirectory {
             self.attachmentsDirectory = attachmentsDirectory
@@ -17,6 +23,8 @@ public final class AppDatabase: Sendable {
 
         try FileManager.default.createDirectory(at: self.attachmentsDirectory, withIntermediateDirectories: true)
         try migrator.migrate(dbWriter)
+        try moveLegacyAPIKeysToKeychain()
+        try markInterruptedStreamsFailed()
     }
 
     /// Shared standard on-disk database instance for the application.
@@ -46,7 +54,7 @@ public final class AppDatabase: Sendable {
             config.qos = .userInitiated
             let dbQueue = try DatabaseQueue(configuration: config)
             let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-            return try AppDatabase(dbQueue, attachmentsDirectory: tempDir)
+            return try AppDatabase(dbQueue, attachmentsDirectory: tempDir, apiKeys: InMemoryAPIKeyStore())
         } catch {
             fatalError("Failed to initialize in-memory database: \(error)")
         }
@@ -183,6 +191,53 @@ public final class AppDatabase: Sendable {
             """)
         }
 
+        // Migration 7: stable message ordering, generation status, per-chat model selection
+        migrator.registerMigration("v7_message_status_and_chat_model") { db in
+            try db.execute(sql: """
+            ALTER TABLE messages ADD COLUMN seq    INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE messages ADD COLUMN status TEXT NOT NULL DEFAULT 'done';
+            ALTER TABLE messages ADD COLUMN error  TEXT;
+
+            UPDATE messages SET seq = (
+                SELECT COUNT(*) FROM messages m2
+                 WHERE m2.chat_id = messages.chat_id
+                   AND (m2.created_at < messages.created_at
+                        OR (m2.created_at = messages.created_at AND m2.rowid <= messages.rowid))
+            );
+            CREATE INDEX messages_by_chat_seq ON messages(chat_id, seq);
+
+            -- Placeholders left behind by failed generations before statuses existed
+            UPDATE messages SET status = 'failed', error = 'The response was interrupted.'
+             WHERE role = 'assistant' AND content = '' AND reasoning = '';
+
+            ALTER TABLE chats ADD COLUMN provider_id TEXT REFERENCES providers(id) ON DELETE SET NULL;
+            ALTER TABLE chats ADD COLUMN model       TEXT;
+            """)
+        }
+
         return migrator
+    }
+
+    /// API keys used to live in `providers.api_key`; move them to the Keychain and blank the column.
+    private func moveLegacyAPIKeysToKeychain() throws {
+        try dbWriter.write { db in
+            let rows = try Row.fetchAll(db, sql: "SELECT id, api_key FROM providers WHERE api_key <> ''")
+            for row in rows {
+                let id: String = row["id"]
+                let key: String = row["api_key"]
+                try apiKeys.setAPIKey(key, for: id)
+                try db.execute(sql: "UPDATE providers SET api_key = '' WHERE id = ?", arguments: [id])
+            }
+        }
+    }
+
+    /// A generation can't survive an app restart; anything still marked streaming was interrupted.
+    private func markInterruptedStreamsFailed() throws {
+        try dbWriter.write { db in
+            try db.execute(sql: """
+                UPDATE messages SET status = 'failed', error = 'The response was interrupted.'
+                 WHERE status = 'streaming'
+                """)
+        }
     }
 }

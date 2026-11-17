@@ -13,19 +13,26 @@ public struct Chat: Identifiable, Codable, Equatable, Sendable {
     public var titleSource: TitleSource
     public var createdAt: Date
     public var updatedAt: Date
+    /// Provider/model last selected in this chat. `nil` falls back to the app defaults.
+    public var providerId: String?
+    public var model: String?
 
     public init(
         id: String = UUID().uuidString.lowercased(),
         title: String,
         titleSource: TitleSource = .placeholder,
         createdAt: Date = Date(),
-        updatedAt: Date = Date()
+        updatedAt: Date = Date(),
+        providerId: String? = nil,
+        model: String? = nil
     ) {
         self.id = id
         self.title = title
         self.titleSource = titleSource
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.providerId = providerId
+        self.model = model
     }
 }
 
@@ -34,11 +41,13 @@ extension Chat: FetchableRecord, PersistableRecord, TableRecord {
     public static let databaseTableName = "chats"
 
     public enum Columns {
-        public static let id = Column(CodingKeys.id)
-        public static let title = Column(CodingKeys.title)
-        public static let titleSource = Column(CodingKeys.titleSource)
-        public static let createdAt = Column(CodingKeys.createdAt)
-        public static let updatedAt = Column(CodingKeys.updatedAt)
+        public static let id = Column("id")
+        public static let title = Column("title")
+        public static let titleSource = Column("title_source")
+        public static let createdAt = Column("created_at")
+        public static let updatedAt = Column("updated_at")
+        public static let providerId = Column("provider_id")
+        public static let model = Column("model")
     }
 
     public func encode(to container: inout PersistenceContainer) throws {
@@ -47,6 +56,8 @@ extension Chat: FetchableRecord, PersistableRecord, TableRecord {
         container[Columns.titleSource] = titleSource.rawValue
         container[Columns.createdAt] = Int64(createdAt.timeIntervalSince1970 * 1000)
         container[Columns.updatedAt] = Int64(updatedAt.timeIntervalSince1970 * 1000)
+        container[Columns.providerId] = providerId
+        container[Columns.model] = model
     }
 
     public init(row: Row) throws {
@@ -58,5 +69,7 @@ extension Chat: FetchableRecord, PersistableRecord, TableRecord {
         let updatedMillis: Int64 = row[Columns.updatedAt]
         createdAt = Date(timeIntervalSince1970: TimeInterval(createdMillis) / 1000.0)
         updatedAt = Date(timeIntervalSince1970: TimeInterval(updatedMillis) / 1000.0)
+        providerId = row[Columns.providerId]
+        model = row[Columns.model]
     }
 }

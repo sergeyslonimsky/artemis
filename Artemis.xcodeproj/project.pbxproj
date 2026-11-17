@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		04E6BBE757E0A35976D37AD0 /* ComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16D39C9F15CBB3EB3D98940 /* ComposerView.swift */; };
+		0B9B73FEF90149500D8EB6AB /* AttachmentProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34FD4F9B238BE5767E3E1271 /* AttachmentProcessor.swift */; };
 		0CD6E964E585AEB1BB2135C5 /* Preset.swift in Sources */ = {isa = PBXBuildFile; fileRef = 870E303516B4ED05DE6C4602 /* Preset.swift */; };
 		0DAF0F8746C85F5F2FC10227 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A5CF4E3FDFADAD670455AB0 /* AppSettings.swift */; };
 		1401EA669C75B52B998791BF /* MessageBubbleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1692584D159B2FB5654D57F5 /* MessageBubbleView.swift */; };
@@ -22,6 +23,7 @@
 		8026D509DE3C82F33D707527 /* ShimmerModifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2DD9FC347DC05D0156997A9 /* ShimmerModifier.swift */; };
 		8D372E62D8F5C6E9E16C9A54 /* LLMClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4ED8EE9616E76B9EFE32E06 /* LLMClient.swift */; };
 		966A863B7796E5DBB491D618 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 231AF1CB37CD8E15D8313A00 /* SidebarView.swift */; };
+		98772A65D040F57DA39553F1 /* APIKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFA3555199FA3736282E4138 /* APIKeyStore.swift */; };
 		9B83A3B819911C10FF6C8D64 /* Chat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7209AFE468C9DF36112B8200 /* Chat.swift */; };
 		A1029DA96183A8347CD6D4B5 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = AAEF9BB9619076431123BA40 /* GRDB */; };
 		A87B7F75E9B3AA5A82539CF9 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65EF6987DE546E7A529FE42F /* SettingsView.swift */; };
@@ -45,6 +47,7 @@
 		1C523D25FB8AE545981B22B3 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		231AF1CB37CD8E15D8313A00 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
 		2EB6D5E0BEBFA0BF8EE02D60 /* StreamBatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamBatcher.swift; sourceTree = "<group>"; };
+		34FD4F9B238BE5767E3E1271 /* AttachmentProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentProcessor.swift; sourceTree = "<group>"; };
 		363F9435EA71FEAB2A5B134A /* AppDatabase+Queries.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppDatabase+Queries.swift"; sourceTree = "<group>"; };
 		452F5C7617FEF0592C5061D8 /* Message.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Message.swift; sourceTree = "<group>"; };
 		5AE564EDB6F10D1E37E18807 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
@@ -59,12 +62,13 @@
 		AC234628A7C2491E4EEB96F4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C16D39C9F15CBB3EB3D98940 /* ComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerView.swift; sourceTree = "<group>"; };
 		C195FCD825798FE5FFE549D4 /* ChatService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatService.swift; sourceTree = "<group>"; };
-		C45A57F109FEA2378F8BD40E /* Artemis.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Artemis.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C45A57F109FEA2378F8BD40E /* Artemis.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Artemis.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E4ED8EE9616E76B9EFE32E06 /* LLMClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMClient.swift; sourceTree = "<group>"; };
 		EE1E82C08D11B67F86EDC93E /* AttachmentCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentCardView.swift; sourceTree = "<group>"; };
 		EEAC8FC86440661B1411ECCF /* ReasoningView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningView.swift; sourceTree = "<group>"; };
 		F2DD9FC347DC05D0156997A9 /* ShimmerModifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShimmerModifier.swift; sourceTree = "<group>"; };
 		F56ED682496876010A2FEC07 /* Attachment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Attachment.swift; sourceTree = "<group>"; };
+		FFA3555199FA3736282E4138 /* APIKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIKeyStore.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -180,6 +184,7 @@
 		9B26138941BBDCB3527FA4BF /* Storage */ = {
 			isa = PBXGroup;
 			children = (
+				FFA3555199FA3736282E4138 /* APIKeyStore.swift */,
 				74161ED0BDD04CEE49A5517A /* AppDatabase.swift */,
 				363F9435EA71FEAB2A5B134A /* AppDatabase+Queries.swift */,
 			);
@@ -207,6 +212,7 @@
 		AD27053AD85690AA509D00AB /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				34FD4F9B238BE5767E3E1271 /* AttachmentProcessor.swift */,
 				A35D6918085949F7776B589D /* AutoTitlingService.swift */,
 				C195FCD825798FE5FFE549D4 /* ChatService.swift */,
 				2EB6D5E0BEBFA0BF8EE02D60 /* StreamBatcher.swift */,
@@ -302,12 +308,14 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				98772A65D040F57DA39553F1 /* APIKeyStore.swift in Sources */,
 				D80C33BA0A1BAC6E7AD5CE51 /* AppDatabase+Queries.swift in Sources */,
 				B15F83F68EE53FAB5927F5BE /* AppDatabase.swift in Sources */,
 				0DAF0F8746C85F5F2FC10227 /* AppSettings.swift in Sources */,
 				74426400F1962183E0163D90 /* ArtemisApp.swift in Sources */,
 				CA5DA5872DAB0F607CBB2747 /* Attachment.swift in Sources */,
 				30B012F82FE13F6205364F8E /* AttachmentCardView.swift in Sources */,
+				0B9B73FEF90149500D8EB6AB /* AttachmentProcessor.swift in Sources */,
 				F4BA544F3EEF8A40DA85DC77 /* AutoTitlingService.swift in Sources */,
 				9B83A3B819911C10FF6C8D64 /* Chat.swift in Sources */,
 				BDF93532B21B3E893B70179A /* ChatService.swift in Sources */,
@@ -341,14 +349,13 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = PLFAQZ6LX2;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Artemis;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -425,14 +432,13 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = PLFAQZ6LX2;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Artemis;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

@@ -1,55 +1,48 @@
 import SwiftUI
+import os
 
 public struct ChatView: View {
     public let chatId: String
-    @Environment(\.dismiss) private var dismiss
 
+    @State private var chat: Chat?
     @State private var messages: [Message] = []
+    @State private var providers: [Provider] = []
     @State private var inputText: String = ""
     @State private var attachments: [Attachment] = []
-    @State private var streamingContent: String = ""
-    @State private var streamingReasoning: String = ""
-    @State private var isStreaming: Bool = false
 
-    @State private var providers: [Provider] = []
-    @State private var selectedProvider: Provider?
+    @State private var selectedProviderId: String?
     @State private var selectedModel: String = ""
     @State private var selectedPreset: Preset?
     @State private var showingModelPicker: Bool = false
+    @State private var errorMessage: String?
 
     private let chatService = ChatService.shared
     private let database = AppDatabase.shared
+    private static let logger = Logger(subsystem: "com.artemis.ios", category: "ChatView")
 
     public init(chatId: String) {
         self.chatId = chatId
     }
 
+    private var selectedProvider: Provider? {
+        providers.first { $0.id == selectedProviderId }
+    }
+
+    private var isBusy: Bool {
+        chatService.isRunning(chatId: chatId)
+    }
+
     public var body: some View {
         VStack(spacing: 0) {
-            // Messages Scroll Area
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 12) {
                         ForEach(messages) { msg in
                             MessageBubbleView(
                                 message: msg,
-                                isStreaming: false,
-                                onRegenerate: {
-                                    regenerate(from: msg.id)
-                                }
+                                live: chatService.liveState(chatId: chatId, messageId: msg.id),
+                                onRegenerate: msg.role == .assistant && !isBusy ? { regenerate(from: msg) } : nil
                             )
-                        }
-
-                        // Live Streaming Bubble
-                        if isStreaming {
-                            let liveMessage = Message(
-                                chatId: chatId,
-                                role: .assistant,
-                                content: streamingContent,
-                                reasoning: streamingReasoning
-                            )
-                            MessageBubbleView(message: liveMessage, isStreaming: true)
-                                .id("bottom_anchor")
                         }
 
                         Color.clear
@@ -58,37 +51,35 @@ public struct ChatView: View {
                     }
                     .padding(.vertical, 12)
                 }
+                .defaultScrollAnchor(.bottom)
                 .scrollDismissesKeyboard(.interactively)
-                .onChange(of: streamingContent) { _, _ in
+                .onChange(of: messages.last) { _, _ in
+                    withAnimation { proxy.scrollTo("scroll_bottom", anchor: .bottom) }
+                }
+                .onChange(of: chatService.runs[chatId]?.content) { _, _ in
                     proxy.scrollTo("scroll_bottom", anchor: .bottom)
                 }
-                .onChange(of: streamingReasoning) { _, _ in
+                .onChange(of: chatService.runs[chatId]?.reasoning) { _, _ in
                     proxy.scrollTo("scroll_bottom", anchor: .bottom)
                 }
             }
 
-            // Floating Composer
             ComposerView(
                 text: $inputText,
                 attachments: $attachments,
-                isBusy: isStreaming,
+                isBusy: isBusy,
                 currentModel: selectedModel,
                 currentPresetTitle: selectedPreset?.title,
                 onSend: sendCurrentMessage,
-                onStop: {
-                    chatService.cancel(chatId: chatId)
-                    isStreaming = false
-                },
-                onSelectModel: {
-                    showingModelPicker = true
-                }
+                onStop: { chatService.cancel(chatId: chatId) },
+                onSelectModel: { showingModelPicker = true }
             )
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 2) {
-                    Text(chatTitle)
+                    Text(chat?.title ?? "Chat")
                         .font(.headline)
                         .lineLimit(1)
                     if !selectedModel.isEmpty {
@@ -102,37 +93,95 @@ public struct ChatView: View {
         .sheet(isPresented: $showingModelPicker) {
             modelPickerSheet
         }
-        .onAppear {
-            loadChat()
+        .alert(
+            "Couldn't send message",
+            isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(errorMessage ?? "")
         }
+        .task { await observeChat() }
+        .task { await observeMessages() }
+        .task { await observeProviders() }
+        .task { loadDefaultPreset() }
     }
 
-    private var chatTitle: String {
-        (try? database.fetchChat(id: chatId))?.title ?? "Chat"
-    }
+    // MARK: - Observation
 
-    private func loadChat() {
+    private func observeChat() async {
         do {
-            messages = try database.fetchMessages(chatId: chatId)
-            providers = try database.fetchProviders()
-            let settings = try database.fetchSettings()
-
-            if let defaultId = settings.defaultProviderId,
-               let prov = providers.first(where: { $0.id == defaultId }) {
-                selectedProvider = prov
-                selectedModel = prov.defaultModel.isEmpty ? (prov.models.first ?? "") : prov.defaultModel
-            } else if let first = providers.first {
-                selectedProvider = first
-                selectedModel = first.defaultModel.isEmpty ? (first.models.first ?? "") : first.defaultModel
-            }
-
-            if let presetId = settings.defaultPresetId {
-                selectedPreset = try? database.fetchPresets().first(where: { $0.id == presetId })
+            for try await value in database.observeChat(id: chatId) {
+                chat = value
+                resolveSelection()
             }
         } catch {
-            print("Error loading chat: \(error)")
+            Self.logger.error("Chat observation failed: \(error.localizedDescription, privacy: .public)")
         }
     }
+
+    private func observeMessages() async {
+        do {
+            for try await value in database.observeMessages(chatId: chatId) {
+                messages = value
+            }
+        } catch {
+            Self.logger.error("Messages observation failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func observeProviders() async {
+        do {
+            for try await value in database.observeProviders() {
+                providers = value
+                resolveSelection()
+            }
+        } catch {
+            Self.logger.error("Providers observation failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func loadDefaultPreset() {
+        guard let settings = try? database.fetchSettings(), let presetId = settings.defaultPresetId else { return }
+        selectedPreset = try? database.fetchPresets().first { $0.id == presetId }
+    }
+
+    /// Picks the chat's saved model, falling back to the default provider. Keeps a valid current choice.
+    private func resolveSelection() {
+        // Wait for the chat so its saved model wins over the defaults.
+        guard chat != nil else { return }
+        if let current = selectedProvider, current.models.isEmpty || current.models.contains(selectedModel) {
+            return
+        }
+
+        if let chat, let providerId = chat.providerId, let model = chat.model, !model.isEmpty,
+           providers.contains(where: { $0.id == providerId }) {
+            selectedProviderId = providerId
+            selectedModel = model
+            return
+        }
+
+        let defaultId = (try? database.fetchSettings())?.defaultProviderId
+        guard let provider = providers.first(where: { $0.id == defaultId }) ?? providers.first else {
+            selectedProviderId = nil
+            selectedModel = ""
+            return
+        }
+        selectedProviderId = provider.id
+        selectedModel = provider.defaultModel.isEmpty ? (provider.models.first ?? "") : provider.defaultModel
+    }
+
+    private func selectModel(_ model: String, of provider: Provider) {
+        selectedProviderId = provider.id
+        selectedModel = model
+        do {
+            try database.setChatModel(chatId: chatId, providerId: provider.id, model: model)
+        } catch {
+            Self.logger.error("Failed to save chat model: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    // MARK: - Actions
 
     private func sendCurrentMessage() {
         guard let provider = selectedProvider, !selectedModel.isEmpty else {
@@ -141,104 +190,69 @@ public struct ChatView: View {
         }
 
         let prompt = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let atts = attachments
-
-        inputText = ""
-        attachments = []
-        isStreaming = true
-        streamingContent = ""
-        streamingReasoning = ""
-
-        // Optimistically add user message to list
-        let optimisticUser = Message(chatId: chatId, role: .user, content: prompt, attachments: atts)
-        messages.append(optimisticUser)
-
-        chatService.send(
-            chatId: chatId,
-            content: prompt,
-            attachments: atts,
-            provider: provider,
-            model: selectedModel,
-            preset: selectedPreset,
-            onDelta: { contentDelta, reasoningDelta in
-                streamingContent += contentDelta
-                streamingReasoning += reasoningDelta
-            },
-            onComplete: { result in
-                isStreaming = false
-                streamingContent = ""
-                streamingReasoning = ""
-                switch result {
-                case .success(let finishedMessage):
-                    messages.append(finishedMessage)
-                case .failure(let error):
-                    let errorMsg = Message(
-                        chatId: chatId,
-                        role: .assistant,
-                        content: "⚠️ Error: \(error.localizedDescription)"
-                    )
-                    messages.append(errorMsg)
-                }
-            }
-        )
-    }
-
-    private func regenerate(from messageId: String) {
-        guard let provider = selectedProvider, !selectedModel.isEmpty else { return }
         do {
-            try database.deleteMessagesFrom(chatId: chatId, messageId: messageId)
-            messages = try database.fetchMessages(chatId: chatId)
-            guard let lastUser = messages.last(where: { $0.role == .user }) else { return }
-
-            isStreaming = true
-            streamingContent = ""
-            streamingReasoning = ""
-
-            chatService.send(
+            try chatService.send(
                 chatId: chatId,
-                content: lastUser.content,
-                attachments: lastUser.attachments,
+                content: prompt,
+                attachments: attachments,
                 provider: provider,
                 model: selectedModel,
-                preset: selectedPreset,
-                onDelta: { c, r in
-                    streamingContent += c
-                    streamingReasoning += r
-                },
-                onComplete: { result in
-                    isStreaming = false
-                    streamingContent = ""
-                    streamingReasoning = ""
-                    if case .success(let finished) = result {
-                        messages.append(finished)
-                    }
-                }
+                preset: selectedPreset
+            )
+            inputText = ""
+            attachments = []
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func regenerate(from message: Message) {
+        guard let provider = selectedProvider, !selectedModel.isEmpty else {
+            showingModelPicker = true
+            return
+        }
+        do {
+            try chatService.regenerate(
+                chatId: chatId,
+                fromMessageId: message.id,
+                provider: provider,
+                model: selectedModel,
+                preset: selectedPreset
             )
         } catch {
-            print("Regenerate failed: \(error)")
+            errorMessage = error.localizedDescription
         }
     }
 
     // MARK: - Model Picker Sheet
     private var modelPickerSheet: some View {
         NavigationStack {
-            List {
-                ForEach(providers) { provider in
-                    Section(header: Text(provider.name)) {
-                        ForEach(provider.models, id: \.self) { model in
-                            Button {
-                                selectedProvider = provider
-                                selectedModel = model
-                                showingModelPicker = false
-                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                            } label: {
-                                HStack {
-                                    Text(model)
-                                        .foregroundStyle(.primary)
-                                    Spacer()
-                                    if selectedProvider?.id == provider.id && selectedModel == model {
-                                        Image(systemName: "checkmark")
-                                            .foregroundStyle(Color.accentColor)
+            Group {
+                if providers.isEmpty {
+                    ContentUnavailableView(
+                        "No Providers",
+                        systemImage: "server.rack",
+                        description: Text("Add a provider in Settings to start chatting.")
+                    )
+                } else {
+                    List {
+                        ForEach(providers) { provider in
+                            Section(header: Text(provider.name)) {
+                                ForEach(provider.models, id: \.self) { model in
+                                    Button {
+                                        selectModel(model, of: provider)
+                                        showingModelPicker = false
+                                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                    } label: {
+                                        HStack {
+                                            Text(model)
+                                                .foregroundStyle(.primary)
+                                            Spacer()
+                                            if selectedProviderId == provider.id && selectedModel == model {
+                                                Image(systemName: "checkmark")
+                                                    .foregroundStyle(Color.accentColor)
+                                            }
+                                        }
                                     }
                                 }
                             }

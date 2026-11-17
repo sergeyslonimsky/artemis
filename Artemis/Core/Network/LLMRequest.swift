@@ -5,20 +5,17 @@ public struct LLMRequest: Sendable {
     public var messages: [Message]
     public var systemPrompt: String?
     public var preset: Preset?
-    public var enableWebSearch: Bool
 
     public init(
         model: String,
         messages: [Message],
         systemPrompt: String? = nil,
-        preset: Preset? = nil,
-        enableWebSearch: Bool = false
+        preset: Preset? = nil
     ) {
         self.model = model
         self.messages = messages
         self.systemPrompt = systemPrompt
         self.preset = preset
-        self.enableWebSearch = enableWebSearch
     }
 
     public func encodeToJSONData() throws -> Data {
@@ -59,7 +56,6 @@ public struct LLMRequest: Sendable {
             messages: wireMessages,
             stream: true,
             streamOptions: .init(includeUsage: true),
-            plugins: enableWebSearch ? [.init(id: "web")] : nil,
             temperature: preset?.temperature,
             topP: preset?.topP,
             frequencyPenalty: preset?.frequencyPenalty,
@@ -76,7 +72,6 @@ private struct WireRequest: Encodable {
     let messages: [WireMessage]
     let stream: Bool
     let streamOptions: WireStreamOptions?
-    let plugins: [WirePlugin]?
     let temperature: Double?
     let topP: Double?
     let frequencyPenalty: Double?
@@ -85,7 +80,6 @@ private struct WireRequest: Encodable {
     enum CodingKeys: String, CodingKey {
         case model, messages, stream
         case streamOptions = "stream_options"
-        case plugins
         case temperature
         case topP = "top_p"
         case frequencyPenalty = "frequency_penalty"
@@ -98,10 +92,6 @@ private struct WireStreamOptions: Encodable {
     enum CodingKeys: String, CodingKey {
         case includeUsage = "include_usage"
     }
-}
-
-private struct WirePlugin: Encodable {
-    let id: String
 }
 
 private struct WireMessage: Encodable {

@@ -3,19 +3,32 @@ import MarkdownUI
 
 public struct MessageBubbleView: View {
     public let message: Message
-    public var isStreaming: Bool = false
+    /// Live text from `ChatService` while the reply is generated.
+    public var live: ChatRunState?
     public var onRegenerate: (() -> Void)?
 
     @State private var copied: Bool = false
 
     public init(
         message: Message,
-        isStreaming: Bool = false,
+        live: ChatRunState? = nil,
         onRegenerate: (() -> Void)? = nil
     ) {
         self.message = message
-        self.isStreaming = isStreaming
+        self.live = live
         self.onRegenerate = onRegenerate
+    }
+
+    private var isStreaming: Bool {
+        message.status == .streaming && (live?.isActive ?? true)
+    }
+
+    private var content: String {
+        message.status == .streaming ? (live?.content ?? "") : message.content
+    }
+
+    private var reasoning: String {
+        message.status == .streaming ? (live?.reasoning ?? "") : message.reasoning
     }
 
     public var body: some View {
@@ -51,7 +64,7 @@ public struct MessageBubbleView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             }
 
-            Text(timeFormatter.string(from: message.createdAt))
+            Text(message.createdAt, format: .dateTime.hour().minute())
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .padding(.trailing, 4)
@@ -62,92 +75,156 @@ public struct MessageBubbleView: View {
     private var assistantBubble: some View {
         VStack(alignment: .leading, spacing: 8) {
             // Reasoning box
-            if !message.reasoning.isEmpty || (isStreaming && message.content.isEmpty) {
+            if !reasoning.isEmpty || (isStreaming && content.isEmpty) {
                 ReasoningView(
-                    text: message.reasoning,
-                    isStreaming: isStreaming && message.content.isEmpty,
+                    text: reasoning,
+                    isStreaming: isStreaming && content.isEmpty,
                     durationMs: message.stats?.durationMs
                 )
             }
 
             // Main Content
-            if isStreaming && message.content.isEmpty && message.reasoning.isEmpty {
+            if isStreaming && content.isEmpty && reasoning.isEmpty {
                 Text("Thinking…")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .shimmer(active: true)
                     .padding(.vertical, 4)
-            } else if !message.content.isEmpty {
-                Markdown(message.content)
-                    .markdownTheme(.gitHub)
-                    .textSelection(.enabled)
+            } else if !content.isEmpty {
+                if isStreaming {
+                    StreamingMarkdownView(text: content)
+                } else {
+                    Markdown(content)
+                        .markdownTheme(.gitHub)
+                        .textSelection(.enabled)
+                }
             }
 
-            // Footer with stats and actions
+            if message.status == .failed {
+                errorBanner
+            }
+
             if !isStreaming {
-                HStack(spacing: 12) {
-                    Text(timeFormatter.string(from: message.createdAt))
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-
-                    if let stats = message.stats {
-                        HStack(spacing: 4) {
-                            if stats.isEstimated {
-                                Text("≈")
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-                            }
-                            Text("\(stats.tokens) tokens")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-
-                            if let rate = stats.tokensPerSecond {
-                                Text("·")
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-                                Text(String(format: "%.1f t/s", rate))
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-                            }
-                        }
-                    }
-
-                    Spacer()
-
-                    // Copy action
-                    Button {
-                        UIPasteboard.general.string = message.content
-                        withAnimation { copied = true }
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                            withAnimation { copied = false }
-                        }
-                    } label: {
-                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                            .font(.caption2)
-                            .foregroundStyle(copied ? .green : .secondary)
-                    }
-                    .buttonStyle(.plain)
-
-                    // Regenerate action
-                    if let onRegenerate = onRegenerate {
-                        Button(action: onRegenerate) {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.top, 4)
+                footer
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var timeFormatter: DateFormatter {
-        let df = DateFormatter()
-        df.timeStyle = .short
-        return df
+    private var errorBanner: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(message.error ?? "Something went wrong.")
+                .font(.callout)
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .background(Color.orange.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private var footer: some View {
+        HStack(spacing: 12) {
+            Text(message.createdAt, format: .dateTime.hour().minute())
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+
+            if message.status == .cancelled {
+                Text("Stopped")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+
+            if let stats = message.stats {
+                HStack(spacing: 4) {
+                    if stats.isEstimated {
+                        Text("≈")
+                    }
+                    Text("\(stats.tokens) tokens")
+
+                    if let rate = stats.tokensPerSecond {
+                        Text("·")
+                        Text(String(format: "%.1f t/s", rate))
+                    }
+                }
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            }
+
+            Spacer()
+
+            if !message.content.isEmpty {
+                Button {
+                    UIPasteboard.general.string = message.content
+                    withAnimation { copied = true }
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        withAnimation { copied = false }
+                    }
+                } label: {
+                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                        .font(.caption2)
+                        .foregroundStyle(copied ? .green : .secondary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            if let onRegenerate = onRegenerate {
+                Button(action: onRegenerate) {
+                    Label(message.status == .failed ? "Retry" : "Regenerate", systemImage: "arrow.clockwise")
+                        .labelStyle(.iconOnly)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.top, 4)
+    }
+}
+
+// MARK: - Streaming Markdown
+
+/// Renders a growing Markdown document without re-parsing it all on every update:
+/// completed blocks are memoized and only the trailing block is re-rendered.
+struct StreamingMarkdownView: View {
+    let text: String
+
+    var body: some View {
+        let (stable, tail) = Self.split(text)
+        VStack(alignment: .leading, spacing: 12) {
+            if !stable.isEmpty {
+                MarkdownChunk(text: stable).equatable()
+            }
+            if !tail.isEmpty {
+                MarkdownChunk(text: tail)
+            }
+        }
+    }
+
+    /// Splits at the last blank line that is not inside a fenced code block.
+    static func split(_ text: String) -> (stable: String, tail: String) {
+        var searchEnd = text.endIndex
+        while let range = text.range(of: "\n\n", options: .backwards, range: text.startIndex..<searchEnd) {
+            let prefix = text[..<range.lowerBound]
+            let fenceCount = prefix.components(separatedBy: "```").count - 1
+            if fenceCount % 2 == 0 {
+                return (String(prefix), String(text[range.upperBound...]))
+            }
+            searchEnd = range.lowerBound
+        }
+        return ("", text)
+    }
+}
+
+private struct MarkdownChunk: View, Equatable {
+    let text: String
+
+    var body: some View {
+        Markdown(text)
+            .markdownTheme(.gitHub)
     }
 }

@@ -15,6 +15,22 @@ extension AppDatabase {
         }
     }
 
+    /// Emits the chat list, newest first, every time it changes.
+    public func observeChats() -> AsyncValueObservation<[Chat]> {
+        ValueObservation
+            .tracking { db in try Chat.order(Chat.Columns.updatedAt.desc).fetchAll(db) }
+            .removeDuplicates()
+            .values(in: dbWriter)
+    }
+
+    /// Emits the chat (or `nil` once deleted) every time it changes.
+    public func observeChat(id: String) -> AsyncValueObservation<Chat?> {
+        ValueObservation
+            .tracking { db in try Chat.fetchOne(db, id: id) }
+            .removeDuplicates()
+            .values(in: dbWriter)
+    }
+
     @discardableResult
     public func createChat(
         title: String,
@@ -48,52 +64,109 @@ extension AppDatabase {
         }
     }
 
-    public func deleteChat(id: String) throws {
+    public func setChatModel(chatId: String, providerId: String?, model: String?) throws {
         try dbWriter.write { db in
-            _ = try Chat.deleteOne(db, id: id)
+            try db.execute(
+                sql: "UPDATE chats SET provider_id = ?, model = ? WHERE id = ?",
+                arguments: [providerId, model, chatId]
+            )
         }
+    }
+
+    public func deleteChat(id: String) throws {
+        let attachmentIds = try dbWriter.write { db in
+            let ids = try String.fetchAll(db, sql: """
+                SELECT a.id FROM attachments a
+                  JOIN messages m ON m.id = a.message_id
+                 WHERE m.chat_id = ?
+                """, arguments: [id])
+            _ = try Chat.deleteOne(db, id: id)
+            return ids
+        }
+        removeAttachmentFiles(ids: attachmentIds)
     }
 
     // MARK: - Messages
-    public func fetchMessages(chatId: String) throws -> [Message] {
-        try dbWriter.read { db in
-            var messages = try Message
-                .filter(Message.Columns.chatId == chatId)
-                .order(Message.Columns.createdAt.asc)
-                .fetchAll(db)
-
-            let attachments = try Attachment
-                .filter(messages.map(\.id).contains(Attachment.Columns.messageId))
-                .fetchAll(db)
-
-            let byMessage = Dictionary(grouping: attachments, by: \.messageId)
-            for i in 0..<messages.count {
-                messages[i].attachments = byMessage[messages[i].id] ?? []
-            }
-            return messages
+    /// Messages of a chat in conversation order.
+    /// - Parameter includeAttachmentData: load attachment bytes from disk (needed to build LLM requests).
+    public func fetchMessages(chatId: String, includeAttachmentData: Bool = false) throws -> [Message] {
+        var messages = try dbWriter.read { db in
+            try Self.fetchMessages(db, chatId: chatId)
         }
+        if includeAttachmentData {
+            for i in messages.indices {
+                for j in messages[i].attachments.indices {
+                    messages[i].attachments[j].data = loadAttachmentData(id: messages[i].attachments[j].id)
+                }
+            }
+        }
+        return messages
     }
 
-    public func addMessage(_ message: Message) throws {
-        try dbWriter.write { db in
-            try message.insert(db)
+    /// Emits the chat's messages (without attachment bytes) every time they change.
+    public func observeMessages(chatId: String) -> AsyncValueObservation<[Message]> {
+        ValueObservation
+            .tracking { db in try Self.fetchMessages(db, chatId: chatId) }
+            .removeDuplicates()
+            .values(in: dbWriter)
+    }
 
-            // Touch chat updated_at
-            let nowMillis = Int64(message.createdAt.timeIntervalSince1970 * 1000)
-            try db.execute(
-                sql: "UPDATE chats SET updated_at = ? WHERE id = ?",
-                arguments: [nowMillis, message.chatId]
-            )
+    private static func fetchMessages(_ db: Database, chatId: String) throws -> [Message] {
+        var messages = try Message
+            .filter(Message.Columns.chatId == chatId)
+            .order(Message.Columns.seq.asc)
+            .fetchAll(db)
 
-            // Store attachments
-            for var attachment in message.attachments {
-                attachment.messageId = message.id
+        let attachments = try Attachment
+            .filter(messages.map(\.id).contains(Attachment.Columns.messageId))
+            .order(Attachment.Columns.createdAt.asc)
+            .fetchAll(db)
+
+        let byMessage = Dictionary(grouping: attachments, by: \.messageId)
+        for i in messages.indices {
+            messages[i].attachments = byMessage[messages[i].id] ?? []
+        }
+        return messages
+    }
+
+    /// Inserts the message at the end of its chat and returns it with the assigned `seq`.
+    @discardableResult
+    public func addMessage(_ message: Message) throws -> Message {
+        // Files go to disk first so a committed row never points to a missing file.
+        var written: [String] = []
+        do {
+            for attachment in message.attachments {
                 if let data = attachment.data {
-                    let fileURL = self.attachmentsDirectory.appendingPathComponent(attachment.id)
-                    try data.write(to: fileURL)
+                    try data.write(to: attachmentURL(id: attachment.id), options: .atomic)
+                    written.append(attachment.id)
                 }
-                try attachment.insert(db)
             }
+
+            return try dbWriter.write { db in
+                var message = message
+                message.seq = try Int64.fetchOne(
+                    db,
+                    sql: "SELECT COALESCE(MAX(seq), 0) + 1 FROM messages WHERE chat_id = ?",
+                    arguments: [message.chatId]
+                ) ?? 1
+                try message.insert(db)
+
+                // Touch chat updated_at
+                let nowMillis = Int64(message.createdAt.timeIntervalSince1970 * 1000)
+                try db.execute(
+                    sql: "UPDATE chats SET updated_at = ? WHERE id = ?",
+                    arguments: [nowMillis, message.chatId]
+                )
+
+                for i in message.attachments.indices {
+                    message.attachments[i].messageId = message.id
+                    try message.attachments[i].insert(db)
+                }
+                return message
+            }
+        } catch {
+            removeAttachmentFiles(ids: written)
+            throw error
         }
     }
 
@@ -101,18 +174,23 @@ extension AppDatabase {
         id: String,
         content: String,
         reasoning: String,
+        status: MessageStatus,
+        error: String? = nil,
         stats: MessageStats?
     ) throws {
         try dbWriter.write { db in
             try db.execute(
                 sql: """
                 UPDATE messages
-                SET content = ?, reasoning = ?, tokens = ?, tokens_estimated = ?, duration_ms = ?
+                SET content = ?, reasoning = ?, status = ?, error = ?,
+                    tokens = ?, tokens_estimated = ?, duration_ms = ?
                 WHERE id = ?
                 """,
                 arguments: [
                     content,
                     reasoning,
+                    status.rawValue,
+                    error,
                     stats?.tokens,
                     stats.map { $0.isEstimated ? 1 : 0 },
                     stats?.durationMs,
@@ -122,22 +200,38 @@ extension AppDatabase {
         }
     }
 
-    public func deleteMessage(id: String) throws {
-        try dbWriter.write { db in
-            _ = try Message.deleteOne(db, id: id)
+    /// Deletes the message and everything after it in the same chat.
+    public func deleteMessagesFrom(chatId: String, messageId: String) throws {
+        let attachmentIds = try dbWriter.write { db in
+            let fromSeq = """
+                (SELECT seq FROM messages WHERE id = ? AND chat_id = ?)
+                """
+            let ids = try String.fetchAll(db, sql: """
+                SELECT a.id FROM attachments a
+                  JOIN messages m ON m.id = a.message_id
+                 WHERE m.chat_id = ? AND m.seq >= \(fromSeq)
+                """, arguments: [chatId, messageId, chatId])
+            try db.execute(
+                sql: "DELETE FROM messages WHERE chat_id = ? AND seq >= \(fromSeq)",
+                arguments: [chatId, messageId, chatId]
+            )
+            return ids
         }
+        removeAttachmentFiles(ids: attachmentIds)
     }
 
-    public func deleteMessagesFrom(chatId: String, messageId: String) throws {
-        try dbWriter.write { db in
-            try db.execute(
-                sql: """
-                DELETE FROM messages
-                WHERE chat_id = ?
-                  AND (created_at, id) >= (SELECT created_at, id FROM messages WHERE id = ?)
-                """,
-                arguments: [chatId, messageId]
-            )
+    // MARK: - Attachment files
+    public func attachmentURL(id: String) -> URL {
+        attachmentsDirectory.appendingPathComponent(id)
+    }
+
+    public func loadAttachmentData(id: String) -> Data? {
+        try? Data(contentsOf: attachmentURL(id: id))
+    }
+
+    private func removeAttachmentFiles(ids: [String]) {
+        for id in ids {
+            try? FileManager.default.removeItem(at: attachmentURL(id: id))
         }
     }
 
@@ -148,7 +242,15 @@ extension AppDatabase {
         }
     }
 
-    public func saveProvider(_ provider: Provider) throws {
+    public func observeProviders() -> AsyncValueObservation<[Provider]> {
+        ValueObservation
+            .tracking { db in try Provider.order(Provider.Columns.createdAt.asc).fetchAll(db) }
+            .removeDuplicates()
+            .values(in: dbWriter)
+    }
+
+    public func saveProvider(_ provider: Provider, apiKey: String) throws {
+        try apiKeys.setAPIKey(apiKey, for: provider.id)
         try dbWriter.write { db in
             try provider.save(db)
         }
@@ -158,6 +260,11 @@ extension AppDatabase {
         try dbWriter.write { db in
             _ = try Provider.deleteOne(db, id: id)
         }
+        try apiKeys.deleteAPIKey(for: id)
+    }
+
+    public func apiKey(providerId: String) -> String {
+        apiKeys.apiKey(for: providerId) ?? ""
     }
 
     // MARK: - Presets

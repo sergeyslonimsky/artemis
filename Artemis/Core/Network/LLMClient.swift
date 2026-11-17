@@ -107,6 +107,13 @@ public final class LLMClient: Sendable {
                         guard let data = payload.data(using: .utf8) else { continue }
                         guard let chunk = try? JSONDecoder().decode(WireChunk.self, from: data) else { continue }
 
+                        // Some providers (e.g. OpenRouter) report failures mid-stream with HTTP 200
+                        if let error = chunk.error {
+                            continuation.yield(.error(error.message ?? "The provider reported an error."))
+                            continuation.finish()
+                            return
+                        }
+
                         // Extract usage if available
                         if let usage = chunk.usage {
                             totalTokens = usage.completionTokens
@@ -189,6 +196,11 @@ private struct WireChunk: Decodable {
         }
     }
 
+    struct WireError: Decodable {
+        let message: String?
+    }
+
     let choices: [Choice]?
     let usage: Usage?
+    let error: WireError?
 }
