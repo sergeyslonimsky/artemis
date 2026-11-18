@@ -86,21 +86,29 @@ final class SpeechOutput {
         }
         if let cached = voices[language] { return cached }
 
-        let preferredRegion = Locale.current.region?.identifier
-        let candidates = AVSpeechSynthesisVoice.speechVoices().filter { voice in
-            voice.language.hasPrefix(language) && !voice.voiceTraits.contains(.isNoveltyVoice)
-                && !voice.voiceTraits.contains(.isPersonalVoice)
+        let best = Self.bestVoice(for: language) ?? AVSpeechSynthesisVoice(language: language)
+        voices[language] = best
+        return best
+    }
+
+    /// Installed voices that can read replies: no novelty or Personal Voice.
+    static func installedVoices() -> [AVSpeechSynthesisVoice] {
+        AVSpeechSynthesisVoice.speechVoices().filter { voice in
+            !voice.voiceTraits.contains(.isNoveltyVoice) && !voice.voiceTraits.contains(.isPersonalVoice)
         }
-        let best = candidates.max { lhs, rhs in
+    }
+
+    /// The voice replies in `language` are read with: Premium > Enhanced > default.
+    static func bestVoice(for language: String) -> AVSpeechSynthesisVoice? {
+        let preferredRegion = Locale.current.region?.identifier
+        return installedVoices().filter { $0.language.hasPrefix(language) }.max { lhs, rhs in
             if lhs.quality != rhs.quality { return lhs.quality.rawValue < rhs.quality.rawValue }
             // Same quality: the user's region (en-GB for a UK user), then a stable order.
             let lhsRegion = lhs.language.hasSuffix(preferredRegion ?? "-")
             let rhsRegion = rhs.language.hasSuffix(preferredRegion ?? "-")
             if lhsRegion != rhsRegion { return !lhsRegion }
             return lhs.identifier > rhs.identifier
-        } ?? AVSpeechSynthesisVoice(language: language)
-        voices[language] = best
-        return best
+        }
     }
 
     private static func language(of text: String) -> String? {
