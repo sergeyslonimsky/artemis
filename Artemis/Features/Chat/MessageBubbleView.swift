@@ -368,7 +368,15 @@ private struct DraftCard: View {
         .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
-    private var icon: String {
+    private var icon: String { DraftPresentation.icon(for: draft) }
+    private var confirmTitle: String { DraftPresentation.confirmTitle(for: draft) }
+    private var doneTitle: String { DraftPresentation.doneTitle(for: draft) }
+    private var detailText: String { DraftPresentation.detail(for: draft) }
+}
+
+/// How drafts read in the chat and in voice mode.
+enum DraftPresentation {
+    static func icon(for draft: ActionDraft) -> String {
         switch draft.kind {
         case .event: "calendar.badge.plus"
         case .reminder: "checklist"
@@ -380,7 +388,7 @@ private struct DraftCard: View {
         }
     }
 
-    private var confirmTitle: String {
+    static func confirmTitle(for draft: ActionDraft) -> String {
         switch draft.kind {
         case .event: "Add"
         case .reminder: "Remind"
@@ -390,7 +398,7 @@ private struct DraftCard: View {
         }
     }
 
-    private var doneTitle: String {
+    static func doneTitle(for draft: ActionDraft) -> String {
         switch draft.kind {
         case .event, .reminder: "Added"
         case .alarm, .timer: "Set"
@@ -399,7 +407,7 @@ private struct DraftCard: View {
         }
     }
 
-    private var detailText: String {
+    static func detail(for draft: ActionDraft) -> String {
         switch draft.kind {
         case .event, .reminder:
             let kind = draft.kind == .event ? "Event" : "Reminder"
@@ -416,7 +424,9 @@ private struct DraftCard: View {
             let day = Calendar.current.isDateInToday(draft.date) ? "Today"
                 : Calendar.current.isDateInTomorrow(draft.date) ? "Tomorrow"
                 : draft.date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
-            return "Alarm · \(day), \(draft.date.formatted(date: .omitted, time: .shortened))"
+            let text = "Alarm · \(day), \(draft.date.formatted(date: .omitted, time: .shortened))"
+            // AlarmKit alarms ring like Clock alarms but aren't listed in the Clock app.
+            return draft.status == .added ? text + " · see Settings, not Clock" : text
         case .timer:
             let length = Duration.seconds(draft.durationMinutes * 60).formatted(.units(allowed: [.hours, .minutes], width: .wide))
             return "Timer · \(length)"

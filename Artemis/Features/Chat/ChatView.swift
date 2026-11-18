@@ -23,6 +23,9 @@ public struct ChatView: View {
     @State private var errorMessage: String?
     @State private var settings = AppSettings()
     @State private var onDeviceStatus = OnDeviceModelStatus.current
+    @State private var voiceSession: VoiceSession?
+    /// The user picked a model in this chat; until then a draft follows the defaults.
+    @State private var userPickedModel = false
 
     private let chatService = ChatService.shared
     private let database = AppDatabase.shared
@@ -96,8 +99,12 @@ public struct ChatView: View {
                     if effectiveMode != .cloud && isOnDeviceUsable {
                         OnDeviceModel.prewarm()
                     }
-                }
+                },
+                onVoice: startVoice
             )
+            .fullScreenCover(item: $voiceSession) { session in
+                VoiceModeView(session: session)
+            }
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -148,6 +155,7 @@ public struct ChatView: View {
         .task { await observeChat() }
         .task { await observeMessages() }
         .task { await observeProviders() }
+        .task { await observeSettings() }
         .task { loadDefaults() }
         .onChange(of: showingModelPicker) { _, showing in
             if showing { onDeviceStatus = .current }
@@ -227,6 +235,17 @@ public struct ChatView: View {
         }
     }
 
+    private func observeSettings() async {
+        do {
+            for try await value in database.observeSettings() {
+                settings = value ?? AppSettings()
+                resolveSelection()
+            }
+        } catch {
+            Self.logger.error("Settings observation failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     private func loadDefaults() {
         settings = (try? database.fetchSettings()) ?? AppSettings()
         onDeviceStatus = .current
@@ -238,7 +257,9 @@ public struct ChatView: View {
     private func resolveSelection() {
         // Wait for the chat so its saved model wins over the defaults.
         guard chatLoaded else { return }
-        if let current = selectedProvider, current.models.isEmpty || current.models.contains(selectedModel) {
+        // A new chat follows the default provider until the user picks a model in it.
+        let followsDefaults = chat == nil && !userPickedModel
+        if !followsDefaults, let current = selectedProvider, current.models.isEmpty || current.models.contains(selectedModel) {
             return
         }
 
@@ -249,7 +270,7 @@ public struct ChatView: View {
             return
         }
 
-        let defaultId = settings.defaultProviderId ?? (try? database.fetchSettings())?.defaultProviderId
+        let defaultId = settings.defaultProviderId
         guard let provider = providers.first(where: { $0.id == defaultId }) ?? providers.first else {
             selectedProviderId = nil
             selectedModel = ""
@@ -260,6 +281,7 @@ public struct ChatView: View {
     }
 
     private func selectModel(_ model: String, of provider: Provider) {
+        userPickedModel = true
         selectedProviderId = provider.id
         selectedModel = model
         guard chat != nil else { return } // a draft saves its selection when it's created
@@ -362,6 +384,34 @@ public struct ChatView: View {
         }
     }
 
+    private func startVoice() {
+        guard canSend else {
+            showingModelPicker = true
+            return
+        }
+        if effectiveMode != .cloud && isOnDeviceUsable {
+            OnDeviceModel.prewarm()
+        }
+        voiceSession = VoiceSession(
+            chatId: chatId,
+            send: { text in
+                if chat == nil {
+                    chat = try database.createChat(
+                        id: chatId,
+                        title: "New Chat",
+                        routingMode: draftMode,
+                        providerId: selectedProviderId,
+                        model: selectedModel.isEmpty ? nil : selectedModel
+                    )
+                }
+                try chatService.send(chatId: chatId, content: text, route: routeRequest, preset: selectedPreset)
+            },
+            answerConsent: { consent, allow in
+                resolveConsent(consent, choice: allow ? .allow : .answerOnDevice)
+            }
+        )
+    }
+
     private func resolveConsent(_ consent: Message, choice: ConsentChoice) {
         perform {
             try chatService.resolveConsent(
@@ -377,15 +427,10 @@ public struct ChatView: View {
 
     /// Carries out a drafted action only after the user confirms it.
     private func resolveDraft(_ draft: ActionDraft, in message: Message, confirm: Bool) {
-        guard confirm else {
-            try? database.setDraftStatus(messageId: message.id, draftId: draft.id, status: .dismissed)
-            return
-        }
         Task {
             do {
-                try await DraftPerformer.perform(draft)
-                try database.setDraftStatus(messageId: message.id, draftId: draft.id, status: .added)
-                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                try await DraftPerformer.resolve(draft, messageId: message.id, confirm: confirm)
+                if confirm { UINotificationFeedbackGenerator().notificationOccurred(.success) }
             } catch {
                 errorMessage = error.localizedDescription
             }

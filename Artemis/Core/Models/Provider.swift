@@ -53,6 +53,12 @@ public enum ProviderKind: String, Codable, Sendable, CaseIterable {
         if host.hasSuffix("groq.com") { return .groq }
         return .custom
     }
+
+    /// Kinds offered when adding a provider; others are still recognized from the endpoint.
+    public static let selectable: [ProviderKind] = [.openRouter, .openAI, .mistral, .custom]
+
+    /// Model IDs of OpenRouter's free variants end with this tag.
+    public static let freeModelSuffix = ":free"
 }
 
 /// What a provider's `/chat/completions` endpoint accepts.
@@ -76,6 +82,8 @@ public struct Provider: Identifiable, Codable, Equatable, Sendable {
     public var defaultModel: String
     /// Per-model capabilities reported by `/models` (e.g. `"tools"`). Models added by hand have none.
     public var modelCapabilities: [String: [String]]
+    /// OpenRouter: list only free models (IDs ending in `:free`).
+    public var onlyFreeModels: Bool
     public var createdAt: Date
     public var updatedAt: Date
 
@@ -110,6 +118,7 @@ public struct Provider: Identifiable, Codable, Equatable, Sendable {
         models: [String] = [],
         defaultModel: String = "",
         modelCapabilities: [String: [String]] = [:],
+        onlyFreeModels: Bool = false,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -120,6 +129,7 @@ public struct Provider: Identifiable, Codable, Equatable, Sendable {
         self.models = models
         self.defaultModel = defaultModel.isEmpty ? (models.first ?? "") : defaultModel
         self.modelCapabilities = modelCapabilities
+        self.onlyFreeModels = onlyFreeModels
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -137,6 +147,7 @@ extension Provider: FetchableRecord, PersistableRecord, TableRecord {
         public static let models = Column("models")
         public static let defaultModel = Column("default_model")
         public static let modelCapabilities = Column("model_capabilities")
+        public static let onlyFreeModels = Column("only_free_models")
         public static let createdAt = Column("created_at")
         public static let updatedAt = Column("updated_at")
     }
@@ -152,6 +163,7 @@ extension Provider: FetchableRecord, PersistableRecord, TableRecord {
         container[Columns.defaultModel] = defaultModel
         let capabilitiesData = try JSONEncoder().encode(modelCapabilities)
         container[Columns.modelCapabilities] = String(data: capabilitiesData, encoding: .utf8) ?? "{}"
+        container[Columns.onlyFreeModels] = onlyFreeModels ? 1 : 0
         container[Columns.createdAt] = Int64(createdAt.timeIntervalSince1970 * 1000)
         container[Columns.updatedAt] = Int64(updatedAt.timeIntervalSince1970 * 1000)
     }
@@ -172,6 +184,8 @@ extension Provider: FetchableRecord, PersistableRecord, TableRecord {
         defaultModel = row[Columns.defaultModel]
         let capabilitiesJSON: String = row[Columns.modelCapabilities]
         modelCapabilities = (try? JSONDecoder().decode([String: [String]].self, from: Data(capabilitiesJSON.utf8))) ?? [:]
+        let onlyFreeInt: Int = row[Columns.onlyFreeModels]
+        onlyFreeModels = onlyFreeInt != 0
         let createdMillis: Int64 = row[Columns.createdAt]
         let updatedMillis: Int64 = row[Columns.updatedAt]
         createdAt = Date(timeIntervalSince1970: TimeInterval(createdMillis) / 1000.0)

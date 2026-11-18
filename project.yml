@@ -54,5 +54,7 @@ targets:
         INFOPLIST_KEY_NSContactsUsageDescription: "Lets the on-device model look up people you ask about and prepare calls or messages you confirm. Your contacts never leave this device."
         INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: "Lets the on-device model answer questions about where you are, the weather and places nearby. Your location isn't shared with cloud models."
         INFOPLIST_KEY_NSHealthShareUsageDescription: "Lets the on-device model answer questions about your activity, sleep and workouts. Your health data never leaves this device."
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Lets you talk to Artemis in voice mode. Speech is recognized on this device."
+        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Turns what you say in voice mode into text, on this device."
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"

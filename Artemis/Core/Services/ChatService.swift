@@ -64,6 +64,8 @@ public final class ChatService {
     public private(set) var runs: [String: ChatRunState] = [:]
 
     @ObservationIgnored private var tasks: [String: Task<Void, Never>] = [:]
+    /// Chats in voice mode: their replies are written to be read aloud.
+    @ObservationIgnored private var voiceChats: Set<String> = []
     @ObservationIgnored private var backgroundTasks: [String: UIBackgroundTaskIdentifier] = [:]
 
     public init(database: AppDatabase = .shared) {
@@ -83,6 +85,10 @@ public final class ChatService {
     public func liveState(chatId: String, messageId: String) -> ChatRunState? {
         guard let run = runs[chatId], run.messageId == messageId else { return nil }
         return run
+    }
+
+    public func setVoiceMode(_ isOn: Bool, chatId: String) {
+        if isOn { voiceChats.insert(chatId) } else { voiceChats.remove(chatId) }
     }
 
     /// Stops the turn. A partial reply is kept and marked cancelled.
@@ -218,7 +224,8 @@ public final class ChatService {
 
         let job = ReplyJob(
             database: database, chatId: chatId, messageId: placeholder.id, backend: backend, preset: preset,
-            toolGroups: decision.reason.toolGroups
+            toolGroups: decision.reason.toolGroups,
+            isVoice: voiceChats.contains(chatId)
         )
         let outcome = await job.run(
             onBatch: { [weak self] batch in
@@ -234,7 +241,8 @@ public final class ChatService {
             var escalationReason: RouteReason?
             if outcome.onDeviceError != nil {
                 escalationReason = .onDeviceFailed
-            } else if outcome.status == .done, await RefusalDetector.isRefusal(outcome.content) {
+            } else if outcome.status == .done, outcome.extras.isEmpty, await RefusalDetector.isRefusal(outcome.content) {
+                // A reply built on tool results (weather, places…) is grounded, not a refusal.
                 escalationReason = .onDeviceDeclined
             }
             if let escalationReason, isCurrent(chatId: chatId, token: token), !Task.isCancelled {
@@ -268,11 +276,17 @@ public final class ChatService {
         case .proceed(let decision):
             try? database.deleteMessagesFrom(chatId: chatId, messageId: failedMessageId)
             await reply(chatId: chatId, token: token, decision: decision, route: route, preset: preset, mayEscalate: false)
+        case .needsConsent(let reason) where reason == .onDeviceDeclined:
+            // The reply may still be useful (the refusal check can be wrong): keep it, and offer
+            // "Ask cloud" under it instead of replacing it with a consent prompt.
+            try? database.setRouteReason(messageId: failedMessageId, reason: reason)
         case .needsConsent(let reason):
             try? database.deleteMessagesFrom(chatId: chatId, messageId: failedMessageId)
             askForConsent(chatId: chatId, reason: reason, route: route)
         case .keepOnDevice:
-            break // The failure stays visible; "Ask cloud" remains available as an explicit choice.
+            // The reply or failure stays visible; its reason shows that a cloud model might do
+            // better, and "Ask cloud" remains available as an explicit choice.
+            try? database.setRouteReason(messageId: failedMessageId, reason: reason)
         }
     }
 
@@ -430,6 +444,14 @@ struct ReplyJob: Sendable {
     let preset: Preset?
     /// On-device tools the route allows; narrowed further by the settings.
     var toolGroups: Set<ToolGroup> = []
+    /// The reply will be read aloud.
+    var isVoice = false
+
+    private static let voiceInstructions = """
+        The user is talking to you by voice and hears your reply read aloud. Answer conversationally, \
+        in a few short spoken sentences. Don't use Markdown, lists, tables, emoji or code unless the user asks. \
+        When you prepare a draft, say the user can say "yes" or tap the card to confirm it.
+        """
 
     private static let logger = Logger(subsystem: "com.artemis.ios", category: "ReplyJob")
 
@@ -449,7 +471,18 @@ struct ReplyJob: Sendable {
             outcome.lastUserPrompt = history.last(where: { $0.role == .user })?.content ?? ""
 
             let settings = try database.fetchSettings()
-            var turn = ChatTurn(messages: history, systemPrompt: settings.systemPrompt, preset: preset)
+            var systemPrompt = settings.systemPrompt
+            var preset = preset
+            if isVoice {
+                // A preset's prompt replaces the default one, so the note goes wherever the prompt is.
+                if var custom = preset, !custom.systemPrompt.isEmpty {
+                    custom.systemPrompt += "\n\n" + Self.voiceInstructions
+                    preset = custom
+                } else {
+                    systemPrompt = systemPrompt.isEmpty ? Self.voiceInstructions : systemPrompt + "\n\n" + Self.voiceInstructions
+                }
+            }
+            var turn = ChatTurn(messages: history, systemPrompt: systemPrompt, preset: preset)
             turn.conversationId = chatId
             turn.replyId = messageId
             turn.toolGroups = isCloud ? [] : toolGroups.intersection(settings.enabledToolGroups)

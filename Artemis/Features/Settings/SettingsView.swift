@@ -20,7 +20,7 @@ public struct SettingsView: View {
         NavigationStack {
             Form {
                 // Providers Section
-                Section(header: Text("Providers")) {
+                Section {
                     ForEach(providers) { provider in
                         Button {
                             providerToEdit = provider
@@ -35,7 +35,7 @@ public struct SettingsView: View {
                                         .foregroundStyle(.secondary)
                                 }
                                 Spacer()
-                                if provider.id == settings.defaultProviderId {
+                                if provider.id == effectiveDefaultId {
                                     Text("Default")
                                         .font(.caption2)
                                         .padding(.horizontal, 6)
@@ -46,6 +46,29 @@ public struct SettingsView: View {
                                 }
                             }
                         }
+                        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                            if provider.id != effectiveDefaultId {
+                                Button {
+                                    makeDefault(provider)
+                                } label: {
+                                    Label("Default", systemImage: "star.fill")
+                                }
+                                .tint(.accentColor)
+                            }
+                        }
+                        .contextMenu {
+                            Button {
+                                makeDefault(provider)
+                            } label: {
+                                Label("Make Default", systemImage: "star")
+                            }
+                            .disabled(provider.id == effectiveDefaultId)
+                            Button {
+                                providerToEdit = provider
+                            } label: {
+                                Label("Edit", systemImage: "pencil")
+                            }
+                        }
                     }
                     .onDelete(perform: deleteProvider)
 
@@ -53,6 +76,12 @@ public struct SettingsView: View {
                         showingAddProvider = true
                     } label: {
                         Label("Add Provider", systemImage: "plus")
+                    }
+                } header: {
+                    Text("Providers")
+                } footer: {
+                    if !providers.isEmpty {
+                        Text("Swipe right on a provider to make it the default. New chats use it with its default model; chats keep the model they were started with.")
                     }
                 }
 
@@ -163,6 +192,8 @@ public struct SettingsView: View {
         return base + " Choosing Cloud mode or tapping Ask cloud always uses the cloud."
     }
 
+    @State private var artemisAlarms: [AlarmScheduler.Scheduled] = []
+
     private var toolsSummary: String {
         let count = settings.enabledToolGroups.count
         return count == 0 ? "Off" : count == ToolGroup.allCases.count ? "All" : "\(count) of \(ToolGroup.allCases.count)"
@@ -192,7 +223,30 @@ public struct SettingsView: View {
                 }
             }
             .disabled(!settings.personalDataTools)
+
+            Section {
+                if artemisAlarms.isEmpty {
+                    Text("None")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(artemisAlarms) { alarm in
+                    LabeledContent {
+                        Text(alarm.date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).hour().minute()))
+                    } label: {
+                        Label(alarm.title, systemImage: alarm.isTimer ? "timer" : "alarm")
+                    }
+                }
+                .onDelete { offsets in
+                    for index in offsets { AlarmScheduler.cancel(artemisAlarms[index].id) }
+                    artemisAlarms = AlarmScheduler.scheduled()
+                }
+            } header: {
+                Text("Alarms set by Artemis")
+            } footer: {
+                Text("They ring like Clock alarms, even in Silent mode, but iOS doesn't list them in the Clock app. Swipe to delete one.")
+            }
         }
+        .onAppear { artemisAlarms = AlarmScheduler.scheduled() }
         .navigationTitle("Device data & actions")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -236,6 +290,21 @@ public struct SettingsView: View {
         }
     }
 
+    /// Chats fall back to the first provider when none was chosen (or it was deleted).
+    private var effectiveDefaultId: String? {
+        providers.first { $0.id == settings.defaultProviderId }?.id ?? providers.first?.id
+    }
+
+    private func makeDefault(_ provider: Provider) {
+        settings.defaultProviderId = provider.id
+        do {
+            try database.saveSettings(settings)
+            UISelectionFeedbackGenerator().selectionChanged()
+        } catch {
+            saveError = error.localizedDescription
+        }
+    }
+
     private func deleteProvider(at offsets: IndexSet) {
         for index in offsets {
             let provider = providers[index]
@@ -253,8 +322,10 @@ public struct SettingsView: View {
 struct ProviderEditView: View {
     @Environment(\.dismiss) private var dismiss
 
+    @State private var kind: ProviderKind
     @State private var name: String
     @State private var baseUrl: String
+    @State private var onlyFreeModels: Bool
     @State private var apiKey: String
     @State private var models: [String]
     @State private var modelCapabilities: [String: [String]]
@@ -271,8 +342,11 @@ struct ProviderEditView: View {
     init(provider: Provider?, apiKey: String, onSave: @escaping (Provider, String) -> Void) {
         self.existingId = provider?.id
         self.existingCreatedAt = provider?.createdAt
-        self._name = State(initialValue: provider?.name ?? "")
-        self._baseUrl = State(initialValue: provider?.baseUrl ?? "https://api.openai.com/v1")
+        let kind = provider?.kind ?? .openRouter
+        self._kind = State(initialValue: kind)
+        self._name = State(initialValue: provider?.name ?? kind.displayName)
+        self._baseUrl = State(initialValue: provider?.baseUrl ?? kind.defaultBaseURL)
+        self._onlyFreeModels = State(initialValue: provider?.onlyFreeModels ?? false)
         self._apiKey = State(initialValue: apiKey)
         self._models = State(initialValue: provider?.models ?? [])
         self._modelCapabilities = State(initialValue: provider?.modelCapabilities ?? [:])
@@ -283,12 +357,35 @@ struct ProviderEditView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Provider Info") {
-                    TextField("Name (e.g. OpenAI, OpenRouter)", text: $name)
-                    TextField("Base URL", text: $baseUrl)
-                        .autocapitalization(.none)
+                Section {
+                    Picker("Provider", selection: $kind) {
+                        ForEach(selectableKinds, id: \.self) { kind in
+                            Text(kind.displayName).tag(kind)
+                        }
+                    }
+                    .onChange(of: kind) { previous, current in
+                        selectKind(current, replacing: previous)
+                    }
+                    TextField("Name", text: $name)
+                    TextField(kind == .custom ? "Base URL (…/v1)" : "Base URL", text: $baseUrl)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
                         .keyboardType(.URL)
                     SecureField("API Key", text: $apiKey)
+                    if kind == .openRouter {
+                        Toggle("Only free models", isOn: $onlyFreeModels)
+                            .onChange(of: onlyFreeModels) { _, isOn in
+                                applyFreeFilter(isOn)
+                            }
+                    }
+                } header: {
+                    Text("Provider Info")
+                } footer: {
+                    if kind == .openRouter {
+                        Text("Only free models keeps models whose ID ends in “:free”. They're rate-limited and may log prompts.")
+                    } else if kind == .custom {
+                        Text("Any OpenAI-compatible endpoint with /chat/completions.")
+                    }
                 }
 
                 Section {
@@ -374,11 +471,13 @@ struct ProviderEditView: View {
                     Button("Save") {
                         let provider = Provider(
                             id: existingId ?? UUID().uuidString.lowercased(),
-                            name: name.isEmpty ? "Provider" : name,
+                            name: name.isEmpty ? kind.displayName : name,
+                            kind: kind,
                             baseUrl: baseUrl,
                             models: models,
                             defaultModel: defaultModel.isEmpty ? (models.first ?? "") : defaultModel,
                             modelCapabilities: modelCapabilities.filter { models.contains($0.key) },
+                            onlyFreeModels: kind == .openRouter && onlyFreeModels,
                             createdAt: existingCreatedAt ?? Date()
                         )
                         onSave(provider, apiKey)
@@ -388,6 +487,44 @@ struct ProviderEditView: View {
                 }
             }
         }
+    }
+
+    /// The kinds to offer; an existing provider of another kind (e.g. Groq) keeps its own.
+    private var selectableKinds: [ProviderKind] {
+        ProviderKind.selectable.contains(kind) ? ProviderKind.selectable : ProviderKind.selectable + [kind]
+    }
+
+    /// Fills in the new kind's name and endpoint unless the user changed them.
+    private func selectKind(_ current: ProviderKind, replacing previous: ProviderKind) {
+        if name.isEmpty || name == previous.displayName {
+            name = current.displayName
+        }
+        if baseUrl.isEmpty || baseUrl == previous.defaultBaseURL {
+            baseUrl = current.defaultBaseURL
+        }
+        // Models of another service don't carry over.
+        if current != previous {
+            models = []
+            modelCapabilities = [:]
+            defaultModel = ""
+            testSuccess = false
+            testError = nil
+        }
+    }
+
+    /// Switching on narrows the list right away; switching off needs the full list again.
+    private func applyFreeFilter(_ isOn: Bool) {
+        if isOn {
+            models = models.filter(Self.isFree)
+            modelCapabilities = modelCapabilities.filter { Self.isFree($0.key) }
+            if !models.contains(defaultModel) { defaultModel = models.first ?? "" }
+        } else if !apiKey.isEmpty || testSuccess {
+            testAndFetchModels()
+        }
+    }
+
+    private static func isFree(_ model: String) -> Bool {
+        model.hasSuffix(ProviderKind.freeModelSuffix)
     }
 
     /// A provider is only usable with at least one model to pick.
@@ -415,7 +552,10 @@ struct ProviderEditView: View {
         let client = LLMClient(baseUrl: baseUrl, apiKey: apiKey)
         Task {
             do {
-                let fetched = try await client.fetchModels()
+                var fetched = try await client.fetchModels()
+                if kind == .openRouter && onlyFreeModels {
+                    fetched = fetched.filter { Self.isFree($0.id) }
+                }
                 await MainActor.run {
                     let ids = fetched.map(\.id)
                     self.models = ids

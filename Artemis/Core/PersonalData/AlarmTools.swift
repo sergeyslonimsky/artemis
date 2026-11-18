@@ -48,10 +48,37 @@ struct DraftAlarmTool: Tool {
     }
 }
 
+struct GetAlarmsTool: Tool {
+    let name = "getAlarms"
+    let description = "Lists the alarms and timers the user set with Artemis. Alarms from the Clock app aren't visible."
+
+    @Generable
+    struct Arguments {}
+
+    func call(arguments: Arguments) async throws -> String {
+        let alarms = await AlarmScheduler.scheduled()
+        guard !alarms.isEmpty else {
+            return "No alarms or timers set with Artemis. (Alarms from the Clock app can't be seen.)"
+        }
+        return alarms.map { alarm in
+            "- \(alarm.title): \(alarm.isTimer ? "timer ending" : "alarm at") \(PersonalDataTools.describe(alarm.date, withTime: true))"
+        }.joined(separator: "\n")
+    }
+}
+
 /// Schedules confirmed alarms and timers with AlarmKit; they ring like Clock alarms, even in
-/// Silent mode, and show on the Lock Screen.
+/// Silent mode, and show on the Lock Screen. They aren't listed in the Clock app, so Artemis
+/// keeps their titles to list them itself.
 @MainActor
 enum AlarmScheduler {
+    struct Scheduled: Identifiable {
+        let id: UUID
+        let title: String
+        let date: Date
+        let isTimer: Bool
+    }
+
+    private static let titlesKey = "alarmTitles"
     struct Metadata: AlarmMetadata {}
 
     enum SchedulerError: LocalizedError {
@@ -75,6 +102,48 @@ enum AlarmScheduler {
         let configuration: AlarmManager.AlarmConfiguration<Metadata> = draft.kind == .timer
             ? .timer(duration: TimeInterval(draft.durationMinutes * 60), attributes: attributes)
             : .alarm(schedule: .fixed(draft.date), attributes: attributes)
-        _ = try await manager.schedule(id: UUID(), configuration: configuration)
+        let id = UUID()
+        _ = try await manager.schedule(id: id, configuration: configuration)
+        var titles = UserDefaults.standard.dictionary(forKey: titlesKey) as? [String: String] ?? [:]
+        titles[id.uuidString] = draft.title
+        UserDefaults.standard.set(titles, forKey: titlesKey)
+    }
+
+    /// Alarms still waiting to ring, soonest first.
+    static func scheduled() -> [Scheduled] {
+        guard let alarms = try? AlarmManager.shared.alarms else { return [] }
+        let titles = UserDefaults.standard.dictionary(forKey: titlesKey) as? [String: String] ?? [:]
+        return alarms.compactMap { alarm -> Scheduled? in
+            let date: Date?
+            switch alarm.schedule {
+            case .fixed(let fixed):
+                date = fixed
+            case .relative(let relative):
+                date = Calendar.current.nextDate(
+                    after: Date(),
+                    matching: DateComponents(hour: relative.time.hour, minute: relative.time.minute),
+                    matchingPolicy: .nextTime
+                )
+            case nil:
+                date = alarm.countdownDuration?.preAlert.map { Date().addingTimeInterval($0) }
+            @unknown default:
+                date = nil
+            }
+            guard let date else { return nil }
+            return Scheduled(
+                id: alarm.id,
+                title: titles[alarm.id.uuidString] ?? (alarm.schedule == nil ? "Timer" : "Alarm"),
+                date: date,
+                isTimer: alarm.schedule == nil
+            )
+        }
+        .sorted { $0.date < $1.date }
+    }
+
+    static func cancel(_ id: UUID) {
+        try? AlarmManager.shared.cancel(id: id)
+        var titles = UserDefaults.standard.dictionary(forKey: titlesKey) as? [String: String] ?? [:]
+        titles[id.uuidString] = nil
+        UserDefaults.standard.set(titles, forKey: titlesKey)
     }
 }

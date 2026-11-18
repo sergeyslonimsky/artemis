@@ -32,7 +32,7 @@ enum PersonalDataTools {
             case .contacts:
                 [FindContactTool(sink: sink), DraftContactActionTool(sink: sink)]
             case .alarms:
-                [DraftAlarmTool(sink: sink)]
+                [DraftAlarmTool(sink: sink), GetAlarmsTool()]
             case .weather:
                 [WeatherTool(sink: sink)]
             case .places:
@@ -54,7 +54,8 @@ enum PersonalDataTools {
                 "Use findContact to look up people in the user's contacts. To call, text or email someone, "
                     + "call draftContactAction."
             case .alarms:
-                "To set an alarm or a timer, call draftAlarm."
+                "To set an alarm or a timer, call draftAlarm as soon as you know the time. "
+                    + "Use getAlarms to see alarms set earlier."
             case .weather:
                 "Use getWeather for the weather and forecast; leave the place empty for the user's location."
             case .places:
@@ -64,8 +65,9 @@ enum PersonalDataTools {
             }
         }
         if groups.contains(where: { [.schedule, .contacts, .alarms].contains($0) }) {
-            lines.append("You can't do these things yourself: drafts appear below your reply and nothing happens "
-                + "until the user confirms, so tell them to confirm it.")
+            lines.append("You can't do these things yourself: a draft tool shows a card the user confirms. "
+                + "Only say something is ready to confirm if you called a draft tool in this reply; never say "
+                + "you set, added or sent anything. Don't ask for confirmation in words: the card is the confirmation.")
         }
         return lines.joined(separator: "\n")
     }

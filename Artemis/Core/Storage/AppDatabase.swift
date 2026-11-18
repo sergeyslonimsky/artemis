@@ -268,6 +268,11 @@ public final class AppDatabase: Sendable {
             try db.execute(sql: "ALTER TABLE settings ADD COLUMN disabled_tool_groups TEXT NOT NULL DEFAULT ''")
         }
 
+        // Migration 13: OpenRouter "only free models" switch
+        migrator.registerMigration("v13_only_free_models") { db in
+            try db.execute(sql: "ALTER TABLE providers ADD COLUMN only_free_models INTEGER NOT NULL DEFAULT 0")
+        }
+
         return migrator
     }
 

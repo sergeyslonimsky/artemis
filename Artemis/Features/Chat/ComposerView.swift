@@ -11,6 +11,8 @@ public struct ComposerView: View {
     public let onStop: () -> Void
     /// Called when the text field gains focus (a cue that a request is coming).
     public var onFocus: (() -> Void)?
+    /// Opens voice mode; shown in place of Send while there's nothing to send.
+    public var onVoice: (() -> Void)?
 
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
     @State private var isShowingFileImporter: Bool = false
@@ -25,7 +27,8 @@ public struct ComposerView: View {
         currentPresetTitle: String? = nil,
         onSend: @escaping () -> Void,
         onStop: @escaping () -> Void,
-        onFocus: (() -> Void)? = nil
+        onFocus: (() -> Void)? = nil,
+        onVoice: (() -> Void)? = nil
     ) {
         self._text = text
         self._attachments = attachments
@@ -34,6 +37,7 @@ public struct ComposerView: View {
         self.onSend = onSend
         self.onStop = onStop
         self.onFocus = onFocus
+        self.onVoice = onVoice
     }
 
     private var canSend: Bool {
@@ -163,6 +167,19 @@ public struct ComposerView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Stop")
+        } else if !canSend, let onVoice {
+            Button {
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                onVoice()
+            } label: {
+                Image(systemName: "waveform")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(Color(uiColor: .systemBackground))
+                    .frame(width: 34, height: 34)
+                    .background(Color.primary, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Voice mode")
         } else {
             Button {
                 guard canSend else { return }

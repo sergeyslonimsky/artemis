@@ -16,6 +16,28 @@ enum DraftPerformer {
         }
     }
 
+    /// Confirms or dismisses a draft shown under `messageId` and records the outcome.
+    static func resolve(_ draft: ActionDraft, messageId: String, confirm: Bool, database: AppDatabase = .shared) async throws {
+        guard confirm else {
+            try database.setDraftStatus(messageId: messageId, draftId: draft.id, status: .dismissed)
+            return
+        }
+        try await perform(draft)
+        try database.setDraftStatus(messageId: messageId, draftId: draft.id, status: .added)
+    }
+
+    /// What to say once a draft is confirmed (voice mode).
+    static func confirmation(for draft: ActionDraft) -> String {
+        switch draft.kind {
+        case .event: "Added \(draft.title) to your calendar."
+        case .reminder: "Reminder added."
+        case .alarm: "Alarm set for \(draft.date.formatted(date: .omitted, time: .shortened))."
+        case .timer: "Timer started."
+        case .call: "Calling \(draft.title)."
+        case .message, .email: "Opening the message to \(draft.title)."
+        }
+    }
+
     static func perform(_ draft: ActionDraft) async throws {
         switch draft.kind {
         case .event, .reminder:

@@ -63,7 +63,9 @@ public enum RouteReason: String, Codable, Sendable {
         case .health: [.health]
         // The user picked the on-device model for everything, so it gets every tool.
         case .userSelectedOnDevice: Set(ToolGroup.allCases)
-        default: []
+        // The cloud was preferred but denied or declined: the on-device model gets every tool,
+        // which may still answer (e.g. weather when the cloud would have searched the web).
+        default: prefersCloud ? Set(ToolGroup.allCases) : []
         }
     }
 

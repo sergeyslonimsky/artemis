@@ -245,6 +245,15 @@ extension AppDatabase {
         }
     }
 
+    public func setRouteReason(messageId: String, reason: RouteReason) throws {
+        try dbWriter.write { db in
+            try db.execute(
+                sql: "UPDATE messages SET route_reason = ? WHERE id = ?",
+                arguments: [reason.rawValue, messageId]
+            )
+        }
+    }
+
     /// Marks a drafted event/reminder as added or dismissed.
     public func setDraftStatus(messageId: String, draftId: String, status: ActionDraft.Status) throws {
         try dbWriter.write { db in
@@ -296,6 +305,13 @@ extension AppDatabase {
         try dbWriter.read { db in
             try Provider.order(Provider.Columns.createdAt.asc).fetchAll(db)
         }
+    }
+
+    public func observeSettings() -> AsyncValueObservation<AppSettings?> {
+        ValueObservation
+            .tracking { db in try AppSettings.fetchOne(db) }
+            .removeDuplicates()
+            .values(in: dbWriter)
     }
 
     public func observeProviders() -> AsyncValueObservation<[Provider]> {
