@@ -17,6 +17,8 @@ public struct AppSettings: Identifiable, Codable, Equatable, Sendable {
     public var personalDataTools: Bool
     /// Tool groups switched off individually.
     public var disabledToolGroups: Set<ToolGroup>
+    /// Starred cloud models, shown first in the model picker.
+    public var favoriteModels: [ModelRef]
 
     public init(
         id: Int64 = 1,
@@ -30,7 +32,8 @@ public struct AppSettings: Identifiable, Codable, Equatable, Sendable {
         onDeviceEnabled: Bool = true,
         onDeviceTitles: Bool = true,
         personalDataTools: Bool = true,
-        disabledToolGroups: Set<ToolGroup> = []
+        disabledToolGroups: Set<ToolGroup> = [],
+        favoriteModels: [ModelRef] = []
     ) {
         self.id = id
         self.defaultProviderId = defaultProviderId
@@ -44,6 +47,7 @@ public struct AppSettings: Identifiable, Codable, Equatable, Sendable {
         self.onDeviceTitles = onDeviceTitles
         self.personalDataTools = personalDataTools
         self.disabledToolGroups = disabledToolGroups
+        self.favoriteModels = favoriteModels
     }
 
     public var enabledToolGroups: Set<ToolGroup> {
@@ -68,6 +72,7 @@ extension AppSettings: FetchableRecord, PersistableRecord, TableRecord {
         public static let onDeviceTitles = Column("on_device_titles")
         public static let personalDataTools = Column("personal_data_tools")
         public static let disabledToolGroups = Column("disabled_tool_groups")
+        public static let favoriteModels = Column("favorite_models")
     }
 
     public func encode(to container: inout PersistenceContainer) throws {
@@ -83,6 +88,7 @@ extension AppSettings: FetchableRecord, PersistableRecord, TableRecord {
         container[Columns.onDeviceTitles] = onDeviceTitles ? 1 : 0
         container[Columns.personalDataTools] = personalDataTools ? 1 : 0
         container[Columns.disabledToolGroups] = disabledToolGroups.map(\.rawValue).sorted().joined(separator: ",")
+        container[Columns.favoriteModels] = String(data: try JSONEncoder().encode(favoriteModels), encoding: .utf8) ?? "[]"
     }
 
     public init(row: Row) throws {
@@ -105,5 +111,18 @@ extension AppSettings: FetchableRecord, PersistableRecord, TableRecord {
         personalDataTools = toolsInt != 0
         let disabledRaw: String = row[Columns.disabledToolGroups] ?? ""
         disabledToolGroups = Set(disabledRaw.split(separator: ",").compactMap { ToolGroup(rawValue: String($0)) })
+        let favoritesJSON: String = row[Columns.favoriteModels] ?? "[]"
+        favoriteModels = (try? JSONDecoder().decode([ModelRef].self, from: Data(favoritesJSON.utf8))) ?? []
+    }
+}
+
+/// A cloud model of a particular provider.
+public struct ModelRef: Codable, Hashable, Sendable {
+    public var providerId: String
+    public var model: String
+
+    public init(providerId: String, model: String) {
+        self.providerId = providerId
+        self.model = model
     }
 }

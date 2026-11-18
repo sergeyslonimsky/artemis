@@ -307,6 +307,20 @@ extension AppDatabase {
         }
     }
 
+    /// Cloud models of the most recently active chats, newest first.
+    public func recentModels(limit: Int = 5) throws -> [ModelRef] {
+        try dbWriter.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT provider_id, model FROM chats
+                WHERE provider_id IS NOT NULL AND model IS NOT NULL AND model != ''
+                GROUP BY provider_id, model
+                ORDER BY MAX(updated_at) DESC
+                LIMIT ?
+                """, arguments: [limit]
+            ).map { ModelRef(providerId: $0["provider_id"], model: $0["model"]) }
+        }
+    }
+
     public func observeSettings() -> AsyncValueObservation<AppSettings?> {
         ValueObservation
             .tracking { db in try AppSettings.fetchOne(db) }

@@ -275,7 +275,8 @@ ALTER TABLE providers ADD COLUMN kind TEXT NOT NULL DEFAULT 'custom';
 
 Осталось:
 
-- [ ] Route sheet (сегмент режима + модели с поиском и избранным).
+- [x] Route sheet: сегмент режима, поиск по моделям всех провайдеров, «Favorites» (свайп/контекстное меню,
+      миграция v14) и «Recent» (из последних чатов), бейджи 🌐 / картинки / free, имя модели без префикса вендора.
 - [ ] Новая структура Settings (On-device / Cloud providers / Prompts).
 - [x] Шаблоны провайдеров в «Add provider»: выбор OpenRouter / OpenAI / Mistral / Custom, для OpenRouter —
       «Only free models» (фильтр `:free`, миграция v13); default-провайдер свайпом вправо.

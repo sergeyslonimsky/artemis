@@ -14,6 +14,7 @@
 		0DAF0F8746C85F5F2FC10227 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A5CF4E3FDFADAD670455AB0 /* AppSettings.swift */; };
 		11BF03409AAF59882384CD48 /* CameraPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40F7F802E338FA2CFDFC670F /* CameraPicker.swift */; };
 		1401EA669C75B52B998791BF /* MessageBubbleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1692584D159B2FB5654D57F5 /* MessageBubbleView.swift */; };
+		163257F5C1B19403A5ECC769 /* ModelPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78BFF2A95BB054E31E965F90 /* ModelPickerSheet.swift */; };
 		258CFDE65F04BF6049B81DC1 /* DrawerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 839F18A569C6FC0C3A3965D7 /* DrawerView.swift */; };
 		260F02F64CE2F6F62BD5CF8B /* AppleOnDeviceBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA6D295FEE0D177E80B95F4A /* AppleOnDeviceBackend.swift */; };
 		29B5E91BC0878B89DB551881 /* ReasoningView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEAC8FC86440661B1411ECCF /* ReasoningView.swift */; };
@@ -91,6 +92,7 @@
 		738FC680627A5D31464A8C52 /* DraftPerformer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftPerformer.swift; sourceTree = "<group>"; };
 		74161ED0BDD04CEE49A5517A /* AppDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDatabase.swift; sourceTree = "<group>"; };
 		7434B894C744E2242C389042 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		78BFF2A95BB054E31E965F90 /* ModelPickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelPickerSheet.swift; sourceTree = "<group>"; };
 		7A5CF4E3FDFADAD670455AB0 /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
 		839F18A569C6FC0C3A3965D7 /* DrawerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawerView.swift; sourceTree = "<group>"; };
 		86D7D556A6AD6FA356D284B1 /* ArtemisApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtemisApp.swift; sourceTree = "<group>"; };
@@ -280,6 +282,7 @@
 				5AE564EDB6F10D1E37E18807 /* ChatView.swift */,
 				C16D39C9F15CBB3EB3D98940 /* ComposerView.swift */,
 				1692584D159B2FB5654D57F5 /* MessageBubbleView.swift */,
+				78BFF2A95BB054E31E965F90 /* ModelPickerSheet.swift */,
 			);
 			path = Chat;
 			sourceTree = "<group>";
@@ -449,6 +452,7 @@
 				72733D37D01FB71A2B2762FC /* Message.swift in Sources */,
 				1401EA669C75B52B998791BF /* MessageBubbleView.swift in Sources */,
 				33E6914300C5EF35B856C45C /* MessageExtras.swift in Sources */,
+				163257F5C1B19403A5ECC769 /* ModelPickerSheet.swift in Sources */,
 				48D7B0D7AFEDC8B401238BDF /* OnDeviceModel.swift in Sources */,
 				6BDE5958EDC220F5C5F71C09 /* OpenAICompatibleBackend.swift in Sources */,
 				A058146961E426280FD5BF63 /* PersonalDataStore.swift in Sources */,

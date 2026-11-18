@@ -26,6 +26,7 @@ public struct ChatView: View {
     @State private var voiceSession: VoiceSession?
     /// The user picked a model in this chat; until then a draft follows the defaults.
     @State private var userPickedModel = false
+    @State private var recentModels: [ModelRef] = []
 
     private let chatService = ChatService.shared
     private let database = AppDatabase.shared
@@ -158,7 +159,10 @@ public struct ChatView: View {
         .task { await observeSettings() }
         .task { loadDefaults() }
         .onChange(of: showingModelPicker) { _, showing in
-            if showing { onDeviceStatus = .current }
+            if showing {
+                onDeviceStatus = .current
+                recentModels = (try? database.recentModels()) ?? []
+            }
         }
     }
 
@@ -447,60 +451,36 @@ public struct ChatView: View {
 
     // MARK: - Model Picker Sheet
     private var modelPickerSheet: some View {
-        NavigationStack {
-            List {
-                Section {
-                    Picker("Mode", selection: Binding(get: { effectiveMode }, set: { setRoutingMode($0) })) {
-                        Text("Auto").tag(RoutingMode.auto)
-                        Text("On-device").tag(RoutingMode.onDevice)
-                        Text("Cloud").tag(RoutingMode.cloud)
-                    }
-                    .pickerStyle(.segmented)
-                    .listRowBackground(Color.clear)
-                } footer: {
-                    Text(modeDescription)
+        ModelPickerSheet(
+            providers: providers,
+            mode: effectiveMode,
+            modeDescription: modeDescription,
+            selection: selectedProviderId.map { ModelRef(providerId: $0, model: selectedModel) },
+            favorites: settings.favoriteModels,
+            recents: recentModels,
+            onModeChange: setRoutingMode,
+            onSelect: { provider, model in
+                selectModel(model, of: provider)
+                if effectiveMode == .onDevice {
+                    setRoutingMode(.cloud)
                 }
+                showingModelPicker = false
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            },
+            onToggleFavorite: toggleFavorite,
+            onDone: { showingModelPicker = false }
+        )
+    }
 
-                if providers.isEmpty {
-                    Section("Cloud model") {
-                        Text("Add a provider in Settings to use cloud models.")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                ForEach(providers) { provider in
-                    Section(header: Text(provider.name)) {
-                        ForEach(provider.models, id: \.self) { model in
-                            Button {
-                                selectModel(model, of: provider)
-                                if effectiveMode == .onDevice {
-                                    setRoutingMode(.cloud)
-                                }
-                                showingModelPicker = false
-                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                            } label: {
-                                HStack {
-                                    Text(model)
-                                        .foregroundStyle(.primary)
-                                    Spacer()
-                                    if selectedProviderId == provider.id && selectedModel == model {
-                                        Image(systemName: "checkmark")
-                                            .foregroundStyle(Color.accentColor)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Model")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { showingModelPicker = false }
-                }
-            }
+    private func toggleFavorite(_ ref: ModelRef) {
+        var updated = settings
+        if let index = updated.favoriteModels.firstIndex(of: ref) {
+            updated.favoriteModels.remove(at: index)
+        } else {
+            updated.favoriteModels.append(ref)
         }
+        perform { try database.saveSettings(updated) }
+        UISelectionFeedbackGenerator().selectionChanged()
     }
 
     private var modeDescription: String {

@@ -273,6 +273,11 @@ public final class AppDatabase: Sendable {
             try db.execute(sql: "ALTER TABLE providers ADD COLUMN only_free_models INTEGER NOT NULL DEFAULT 0")
         }
 
+        // Migration 14: favorite cloud models
+        migrator.registerMigration("v14_favorite_models") { db in
+            try db.execute(sql: "ALTER TABLE settings ADD COLUMN favorite_models TEXT NOT NULL DEFAULT '[]'")
+        }
+
         return migrator
     }
 
