@@ -166,7 +166,9 @@ public final class ChatService {
         let chatAllowsCloud = (try? database.fetchChat(id: chatId))?.cloudAllowed ?? false
         switch settings.cloudPolicy.apply(to: decision, mode: route.mode, chatAllowsCloud: chatAllowsCloud) {
         case .proceed(let decision):
-            await reply(chatId: chatId, token: token, decision: decision, route: route, preset: preset, mayEscalate: route.mode == .auto)
+            // Escalating is pointless when the cloud model is the reason the turn stayed local.
+            let mayEscalate = route.mode == .auto && decision.reason != .cloudCantReadAttachment
+            await reply(chatId: chatId, token: token, decision: decision, route: route, preset: preset, mayEscalate: mayEscalate)
         case .keepOnDevice(let reason):
             await reply(chatId: chatId, token: token, decision: .onDevice(reason), route: route, preset: preset, mayEscalate: false)
         case .needsConsent(let reason):
@@ -284,7 +286,8 @@ public final class ChatService {
             recentHistory: Array(messages[..<index].filter(ReplyJob.belongsInContext).suffix(2)),
             mode: route.mode,
             onDeviceUsable: settings.onDeviceEnabled && OnDeviceModelStatus.current.isAvailable,
-            hasCloud: route.cloud != nil
+            hasCloud: route.cloud != nil,
+            cloudCapabilities: route.cloud.map { $0.provider.capabilities(for: $0.model) }
         )
     }
 

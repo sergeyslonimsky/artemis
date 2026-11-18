@@ -15,6 +15,7 @@ public enum RouteReason: String, Codable, Sendable {
     /// Legacy: kept so replies stored before the classifier ran without a cloud still decode.
     case noCloudProvider = "no_cloud_provider"
     case smallTalk = "small_talk"
+    case cloudCantReadAttachment = "cloud_cant_read_attachment"
 
     // Classifier
     case simple
@@ -36,7 +37,7 @@ public enum RouteReason: String, Codable, Sendable {
              .longInput, .onDeviceUnavailable, .freshInformation, .complexReasoning, .code, .longForm,
              .onDeviceFailed:
             true
-        case .userSelectedOnDevice, .noCloudProvider, .smallTalk, .simple, .writing, .deviceAction:
+        case .userSelectedOnDevice, .noCloudProvider, .smallTalk, .cloudCantReadAttachment, .simple, .writing, .deviceAction:
             false
         }
     }
@@ -53,6 +54,7 @@ public enum RouteReason: String, Codable, Sendable {
         case .onDeviceUnavailable: "the on-device model isn't available"
         case .noCloudProvider: "no cloud provider is configured"
         case .smallTalk: "a quick reply"
+        case .cloudCantReadAttachment: "the selected cloud model can't read this attachment"
         case .simple: "a simple question"
         case .writing: "a writing task"
         case .deviceAction: "device actions aren't possible from chat"

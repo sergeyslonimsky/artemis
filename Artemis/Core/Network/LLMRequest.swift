@@ -9,6 +9,9 @@ public struct LLMRequest: Sendable {
     public var capabilities: ProviderCapabilities
     /// Asks the gateway to run its own web search/fetch tool loop (OpenRouter-style `plugins` marker).
     public var webSearch: Bool
+    /// `false` replaces attachments of earlier messages with text notes (fallback when a provider
+    /// rejects them despite advertising support).
+    public var includesPastAttachments: Bool = true
 
     public init(
         model: String,
@@ -34,7 +37,10 @@ public struct LLMRequest: Sendable {
             wireMessages.append(WireMessage(role: "system", content: .text(system)))
         }
 
-        for msg in messages {
+        // Only the message being answered must carry its attachments; earlier ones the model
+        // can't read become a note (the earlier reply about them is already in the history).
+        let latestUserIndex = messages.lastIndex { $0.role == .user }
+        for (index, msg) in messages.enumerated() {
             let content: WireContent
             if msg.attachments.isEmpty {
                 content = .text(msg.content)
@@ -44,7 +50,7 @@ public struct LLMRequest: Sendable {
                     parts.append(WireContentPart(type: "text", text: msg.content))
                 }
                 for att in msg.attachments {
-                    if let part = try wirePart(for: att) {
+                    if let part = try wirePart(for: att, isCurrent: index == latestUserIndex) {
                         parts.append(part)
                     }
                 }
@@ -69,12 +75,16 @@ public struct LLMRequest: Sendable {
     }
 
     /// Text documents are inlined (works everywhere); binary ones need `file` part support.
-    private func wirePart(for attachment: Attachment) throws -> WireContentPart? {
+    private func wirePart(for attachment: Attachment, isCurrent: Bool) throws -> WireContentPart? {
         guard let data = attachment.data else { return nil }
+
+        if !isCurrent && !includesPastAttachments {
+            return try unsupported(attachment, isCurrent: false, reason: "")
+        }
 
         if attachment.kind == .image {
             guard capabilities.supportsImages else {
-                throw LLMRequestError.unsupportedAttachment(attachment.filename, reason: "this provider does not accept images")
+                return try unsupported(attachment, isCurrent: isCurrent, reason: "\(model) doesn't accept images")
             }
             return WireContentPart(type: "image_url", imageUrl: .init(url: Self.dataURL(attachment, data)))
         }
@@ -84,12 +94,21 @@ public struct LLMRequest: Sendable {
         }
 
         guard capabilities.supportsFileParts else {
-            throw LLMRequestError.unsupportedAttachment(attachment.filename, reason: "this provider does not accept file attachments")
+            return try unsupported(attachment, isCurrent: isCurrent, reason: "\(model) doesn't accept files like this")
         }
         return WireContentPart(
             type: "file",
             file: .init(filename: attachment.filename, fileData: Self.dataURL(attachment, data))
         )
+    }
+
+    /// Fails for the message being answered; earlier attachments degrade to a text note.
+    private func unsupported(_ attachment: Attachment, isCurrent: Bool, reason: String) throws -> WireContentPart {
+        if isCurrent {
+            throw LLMRequestError.unsupportedAttachment(attachment.filename, reason: reason)
+        }
+        let kind = attachment.kind == .image ? "Image" : "File"
+        return WireContentPart(type: "text", text: "[\(kind): \(attachment.filename) — not available to this model]")
     }
 
     private static func dataURL(_ attachment: Attachment, _ data: Data) -> String {
@@ -108,7 +127,7 @@ public enum LLMRequestError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .unsupportedAttachment(let filename, let reason):
-            "Can't send \(filename): \(reason)."
+            "Can't send \(filename): \(reason). Switch to On-device or a model that supports it."
         }
     }
 }

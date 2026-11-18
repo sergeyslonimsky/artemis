@@ -83,6 +83,20 @@ public struct Provider: Identifiable, Codable, Equatable, Sendable {
 
     /// Capability that marks a model the gateway can run its web search/fetch tool loop for.
     public static let toolsCapability = "tools"
+    /// Gateway capabilities for the attachment kinds this app sends.
+    public static let imageInputCapability = "image_input"
+    public static let pdfInputCapability = "pdf_input"
+
+    /// What `model` accepts: from its `/models` capabilities when the provider reports them,
+    /// otherwise the provider kind's defaults.
+    public func capabilities(for model: String) -> ProviderCapabilities {
+        var result = kind.capabilities
+        if let reported = modelCapabilities[model], !reported.isEmpty {
+            result.supportsImages = reported.contains(Self.imageInputCapability)
+            result.supportsFileParts = reported.contains(Self.pdfInputCapability)
+        }
+        return result
+    }
 
     public func supportsWebSearch(model: String) -> Bool {
         modelCapabilities[model]?.contains(Self.toolsCapability) == true

@@ -13,6 +13,7 @@ public struct ComposerView: View {
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
     @State private var isShowingFileImporter: Bool = false
     @State private var isShowingPhotoPicker: Bool = false
+    @State private var isShowingCamera: Bool = false
     @FocusState private var isFocused: Bool
 
     public init(
@@ -100,6 +101,10 @@ public struct ComposerView: View {
             maxSelectionCount: 5,
             matching: .images
         )
+        .fullScreenCover(isPresented: $isShowingCamera) {
+            CameraPicker(onCapture: handleCameraPhoto)
+                .ignoresSafeArea()
+        }
         .onChange(of: selectedPhotoItems) { _, items in
             handlePhotoSelection(items)
         }
@@ -107,6 +112,13 @@ public struct ComposerView: View {
 
     private var attachMenu: some View {
         Menu {
+            if CameraPicker.isAvailable {
+                Button {
+                    isShowingCamera = true
+                } label: {
+                    Label("Camera", systemImage: "camera")
+                }
+            }
             // A PhotosPicker nested in a Menu never presents; drive it from state instead.
             Button {
                 isShowingPhotoPicker = true
@@ -175,6 +187,18 @@ public struct ComposerView: View {
                 if let attachment {
                     attachments.append(attachment)
                 }
+            }
+        }
+    }
+
+    private func handleCameraPhoto(_ image: UIImage) {
+        Task {
+            let attachment = await Task.detached(priority: .userInitiated) { () -> Attachment? in
+                guard let data = image.jpegData(compressionQuality: 0.9) else { return nil }
+                return try? AttachmentProcessor.imageAttachment(from: data, filename: "photo")
+            }.value
+            if let attachment {
+                attachments.append(attachment)
             }
         }
     }

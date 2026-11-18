@@ -15,6 +15,8 @@ public struct RouteContext: Sendable {
     public var hasCloud: Bool
     /// A non-text file the on-device model can't read (filled in by `Router`).
     public var hasUnsupportedAttachment: Bool
+    /// What the chat's cloud model accepts; `nil` when there's no cloud model.
+    public var cloudCapabilities: ProviderCapabilities?
 
     public init(
         message: Message,
@@ -22,7 +24,8 @@ public struct RouteContext: Sendable {
         mode: RoutingMode,
         onDeviceUsable: Bool,
         hasCloud: Bool,
-        hasUnsupportedAttachment: Bool = false
+        hasUnsupportedAttachment: Bool = false,
+        cloudCapabilities: ProviderCapabilities? = nil
     ) {
         self.message = message
         self.recentHistory = recentHistory
@@ -30,6 +33,7 @@ public struct RouteContext: Sendable {
         self.onDeviceUsable = onDeviceUsable
         self.hasCloud = hasCloud
         self.hasUnsupportedAttachment = hasUnsupportedAttachment
+        self.cloudCapabilities = cloudCapabilities
     }
 }
 
@@ -56,6 +60,11 @@ public struct Router: Sendable {
         // reply can say a cloud model would do better.
         if context.mode == .auto, decision.backend == .cloud, !context.hasCloud {
             return .onDevice(decision.reason)
+        }
+        // The cloud model would reject this message's image or file but the on-device model reads it.
+        if context.mode == .auto, decision.backend == .cloud, context.onDeviceUsable, !context.hasUnsupportedAttachment,
+           let cloud = context.cloudCapabilities, !RoutingRules.accepts(context.message, cloud) {
+            return .onDevice(.cloudCantReadAttachment)
         }
         return decision
     }
@@ -118,6 +127,14 @@ public struct RoutingRules: Sendable {
         let textBytes = message.attachments.filter(Self.isTextDocument).reduce(0) { $0 + $1.size }
         let otherCount = message.attachments.count { !Self.isTextDocument($0) }
         return (message.content.utf8.count + textBytes) / 3 + otherCount * AppleOnDeviceBackend.estimatedTokensPerImage
+    }
+
+    /// Whether a cloud model with `capabilities` can take all of the message's attachments.
+    static func accepts(_ message: Message, _ capabilities: ProviderCapabilities) -> Bool {
+        message.attachments.allSatisfy { attachment in
+            if attachment.kind == .image { return capabilities.supportsImages }
+            return isTextDocument(attachment) || capabilities.supportsFileParts
+        }
     }
 
     static func isTextDocument(_ attachment: Artemis.Attachment) -> Bool {

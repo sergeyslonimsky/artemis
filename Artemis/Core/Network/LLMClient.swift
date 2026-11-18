@@ -93,7 +93,7 @@ public final class LLMClient: Sendable {
                         for try await line in bytes.lines {
                             errorBody += line
                         }
-                        continuation.yield(.error(errorBody.isEmpty ? "Server returned HTTP \(httpResponse.statusCode)" : errorBody))
+                        continuation.yield(.error(Self.errorMessage(from: errorBody, status: httpResponse.statusCode)))
                         continuation.finish()
                         return
                     }
@@ -177,6 +177,22 @@ public final class LLMClient: Sendable {
                 task.cancel()
             }
         }
+    }
+}
+
+extension LLMClient {
+    /// The `error.message` of an OpenAI-style error body, or the raw body / status as a fallback.
+    static func errorMessage(from body: String, status: Int) -> String {
+        struct ErrorBody: Decodable {
+            struct Detail: Decodable { let message: String? }
+            let error: Detail?
+        }
+        if let data = body.data(using: .utf8),
+           let message = (try? JSONDecoder().decode(ErrorBody.self, from: data))?.error?.message,
+           !message.isEmpty {
+            return "\(message) (HTTP \(status))"
+        }
+        return body.isEmpty ? "Server returned HTTP \(status)" : body
     }
 }
 
