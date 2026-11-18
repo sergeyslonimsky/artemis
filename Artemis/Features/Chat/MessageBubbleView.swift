@@ -20,6 +20,8 @@ public struct MessageBubbleView: View {
     public var onConsent: ((ConsentChoice) -> Void)?
     /// Whether the chat has a cloud model to escalate to.
     public var cloudAvailable: Bool
+    /// Confirm (`true`) or dismiss a drafted event/reminder.
+    public var onDraft: ((ActionDraft, Bool) -> Void)?
 
     @State private var copied = false
     @State private var showingTextSelection = false
@@ -31,7 +33,8 @@ public struct MessageBubbleView: View {
         onRegenerate: (() -> Void)? = nil,
         onAskCloud: (() -> Void)? = nil,
         onConsent: ((ConsentChoice) -> Void)? = nil,
-        cloudAvailable: Bool = true
+        cloudAvailable: Bool = true,
+        onDraft: ((ActionDraft, Bool) -> Void)? = nil
     ) {
         self.message = message
         self.live = live
@@ -40,6 +43,7 @@ public struct MessageBubbleView: View {
         self.onAskCloud = onAskCloud
         self.onConsent = onConsent
         self.cloudAvailable = cloudAvailable
+        self.onDraft = onDraft
     }
 
     private var cloudLabel: String {
@@ -121,7 +125,11 @@ public struct MessageBubbleView: View {
                 )
             }
 
-            if isStreaming && content.isEmpty && reasoning.isEmpty {
+            if isStreaming && content.isEmpty, let activity = live?.activity {
+                Label(activity.activityLabel, systemImage: activity.systemImage)
+                    .foregroundStyle(.secondary)
+                    .shimmer(active: true)
+            } else if isStreaming && content.isEmpty && reasoning.isEmpty {
                 Text("Thinking…")
                     .foregroundStyle(.secondary)
                     .shimmer(active: true)
@@ -139,6 +147,22 @@ public struct MessageBubbleView: View {
                 .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .contextMenu { if !isStreaming { textActions } }
                 .padding(-8)
+            }
+
+            if !isStreaming {
+                ForEach(message.extras.drafts) { draft in
+                    DraftCard(draft: draft) { confirm in onDraft?(draft, confirm) }
+                }
+            }
+
+            if !isStreaming, !message.extras.personalDataUsed.isEmpty {
+                HStack(spacing: 12) {
+                    ForEach(message.extras.personalDataUsed, id: \.self) { source in
+                        Label(source.usedLabel, systemImage: source.systemImage)
+                    }
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
             }
 
             if message.status == .failed {
@@ -274,6 +298,70 @@ public struct MessageBubbleView: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
+/// A drafted event or reminder; nothing is saved until the user taps Add.
+private struct DraftCard: View {
+    let draft: ActionDraft
+    let onDecision: (Bool) -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: draft.kind == .event ? "calendar.badge.plus" : "checklist")
+                .font(.title3)
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 40, height: 40)
+                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(draft.title)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(2)
+                Text(whenText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 8)
+
+            switch draft.status {
+            case .pending:
+                VStack(spacing: 6) {
+                    Button(draft.kind == .event ? "Add" : "Remind") { onDecision(true) }
+                        .buttonStyle(.borderedProminent)
+                    Button("Dismiss") { onDecision(false) }
+                        .font(.caption)
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.secondary)
+                }
+                .controlSize(.small)
+                .buttonBorderShape(.capsule)
+            case .added:
+                Label("Added", systemImage: "checkmark.circle.fill")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.green)
+            case .dismissed:
+                Text("Dismissed")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(12)
+        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private var whenText: String {
+        let kind = draft.kind == .event ? "Event" : "Reminder"
+        guard draft.hasTime else {
+            return "\(kind) · \(draft.date.formatted(.dateTime.weekday(.wide).day().month(.wide)))"
+        }
+        var text = "\(kind) · \(draft.date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).hour().minute()))"
+        if draft.kind == .event, draft.durationMinutes > 0 {
+            let end = draft.date.addingTimeInterval(TimeInterval(draft.durationMinutes * 60))
+            text += "–" + end.formatted(date: .omitted, time: .shortened)
+        }
+        return text
     }
 }
 

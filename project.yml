@@ -37,5 +37,7 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_NSCameraUsageDescription: "Take a photo to attach to your message."
+        INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription: "Lets the on-device model answer questions about your schedule and add events you confirm. Your calendar never leaves this device."
+        INFOPLIST_KEY_NSRemindersFullAccessUsageDescription: "Lets the on-device model read your reminders and add ones you confirm. Your reminders never leave this device."
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"

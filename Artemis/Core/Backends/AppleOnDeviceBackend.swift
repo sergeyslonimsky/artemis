@@ -80,20 +80,24 @@ public struct AppleOnDeviceBackend: ChatBackend {
     /// A small model doesn't know where it runs and borrows capabilities from bigger assistants,
     /// so its limits are stated once, calmly, after what it can do: a long list of "can't"s up
     /// front made it refuse things it handles well (e.g. describing an image).
-    static func baseInstructions(now: Date = Date()) -> String {
+    static func baseInstructions(now: Date = Date(), personalData: Bool = false) -> String {
         let today = now.formatted(.dateTime.weekday(.wide).day().month(.wide).year())
-        return """
+        let actions = personalData
+            ? "setting alarms, sending messages, or making calls"
+            : "setting alarms or reminders, sending messages, or making calls"
+        let base = """
             You are Artemis, a helpful assistant running on the user's iPhone. Today is \(today).
 
             You can read images and documents the user attaches, answer questions, explain things, \
             write and edit text, translate, and summarize. Answer directly and helpfully, using Markdown \
             when it helps.
 
-            You have no internet access and can't take actions on the device, such as setting alarms or \
-            reminders, sending messages, or making calls. Only when a request truly depends on one of these, \
-            say in one short sentence that you can't do that part, then help with everything else. \
-            Don't mention other models or services. If you're unsure about a fact, say so briefly.
+            You have no internet access and can't take actions on the device, such as \(actions). \
+            Only when a request truly depends on one of these, say in one short sentence that you can't do \
+            that part, then help with everything else. Don't mention other models or services. \
+            If you're unsure about a fact, say so briefly.
             """
+        return personalData ? base + "\n\n" + PersonalDataTools.instructions : base
     }
 
     private static let logger = Logger(subsystem: "com.artemis.ios", category: "AppleOnDeviceBackend")
@@ -129,7 +133,7 @@ public struct AppleOnDeviceBackend: ChatBackend {
             throw OnDeviceError.failed("There is no message to answer.")
         }
 
-        let request = try await PromptParts(message: last, model: model)
+        let request = try await PromptParts(message: last, model: model, includesTime: turn.allowsPersonalData)
         let responseBudget = min(maxResponseTokens, model.contextSize / 4)
         let reservedTokens = responseBudget + request.images.count * estimatedTokensPerImage
         let instructions = instructions(for: turn)
@@ -138,24 +142,35 @@ public struct AppleOnDeviceBackend: ChatBackend {
         // Apple recommends one session per conversation: the model keeps its cache instead of
         // re-reading the history. Reuse it while nothing changed since the last on-device turn.
         var session: LanguageModelSession
+        var sink: ToolEventSink
         if let conversationId = turn.conversationId,
            let cached = await OnDeviceSessionCache.shared.take(
                conversationId: conversationId,
                historyIds: history.map(\.id),
                instructions: instructions
            ),
-           await fits(cached.transcript, promptText: request.text, reservedTokens: reservedTokens, model: model) {
-            session = cached
+           await fits(cached.session.transcript, promptText: request.text, reservedTokens: reservedTokens, model: model) {
+            session = cached.session
+            sink = cached.sink
         } else {
+            sink = ToolEventSink()
+            let tools = turn.allowsPersonalData ? PersonalDataTools.all(sink: sink) : []
             let transcript = try await buildTranscript(
                 instructions: instructions,
                 history: history,
                 promptText: request.text,
-                reservedTokens: reservedTokens,
+                reservedTokens: reservedTokens + (tools.isEmpty ? 0 : (try? await model.tokenCount(for: tools)) ?? 400),
                 model: model
             )
-            session = LanguageModelSession(model: model, transcript: transcript)
+            session = LanguageModelSession(model: model, tools: tools, transcript: transcript)
         }
+        sink.setHandler { event in
+            switch event {
+            case .started(let source): continuation.yield(.toolStarted(source))
+            case .drafted(let draft): continuation.yield(.actionDraft(draft))
+            }
+        }
+        defer { sink.setHandler(nil) }
         let options = GenerationOptions(
             temperature: turn.preset?.temperature,
             maximumResponseTokens: responseBudget
@@ -187,6 +202,7 @@ public struct AppleOnDeviceBackend: ChatBackend {
         if let conversationId = turn.conversationId, let replyId = turn.replyId, !Task.isCancelled {
             await OnDeviceSessionCache.shared.store(
                 session,
+                sink: sink,
                 conversationId: conversationId,
                 coveredIds: history.map(\.id) + [last.id, replyId],
                 instructions: instructions
@@ -205,8 +221,9 @@ public struct AppleOnDeviceBackend: ChatBackend {
     private static func instructions(for turn: ChatTurn) -> String {
         let custom = turn.preset?.systemPrompt.isEmpty == false ? turn.preset?.systemPrompt : turn.systemPrompt
         guard turn.usesAssistantPersona else { return custom ?? "" }
-        guard let custom, !custom.isEmpty else { return baseInstructions() }
-        return baseInstructions() + "\n\n" + custom
+        let base = baseInstructions(personalData: turn.allowsPersonalData)
+        guard let custom, !custom.isEmpty else { return base }
+        return base + "\n\n" + custom
     }
 
     /// Instructions + as much recent history as fits next to the prompt and the reserved tokens.
@@ -324,8 +341,10 @@ public struct AppleOnDeviceBackend: ChatBackend {
 actor OnDeviceSessionCache {
     static let shared = OnDeviceSessionCache()
 
-    private struct Entry {
+    struct Entry: Sendable {
         let session: LanguageModelSession
+        /// The tools of `session` report through this sink.
+        let sink: ToolEventSink
         let coveredIds: [String]
         let instructions: String
     }
@@ -333,16 +352,16 @@ actor OnDeviceSessionCache {
     private var entries: [String: Entry] = [:]
 
     /// The cached session if it covers exactly `historyIds` with the same instructions.
-    func take(conversationId: String, historyIds: [String], instructions: String) -> LanguageModelSession? {
+    func take(conversationId: String, historyIds: [String], instructions: String) -> Entry? {
         guard let entry = entries.removeValue(forKey: conversationId),
               entry.coveredIds == historyIds, entry.instructions == instructions else {
             return nil
         }
-        return entry.session
+        return entry
     }
 
-    func store(_ session: LanguageModelSession, conversationId: String, coveredIds: [String], instructions: String) {
-        entries[conversationId] = Entry(session: session, coveredIds: coveredIds, instructions: instructions)
+    func store(_ session: LanguageModelSession, sink: ToolEventSink, conversationId: String, coveredIds: [String], instructions: String) {
+        entries[conversationId] = Entry(session: session, sink: sink, coveredIds: coveredIds, instructions: instructions)
     }
 }
 
@@ -354,8 +373,13 @@ private struct PromptParts {
     let images: [CGImage]
     let prompt: Prompt
 
-    init(message: Message, model: SystemLanguageModel) async throws {
+    /// - Parameter includesTime: appends the send time, so relative dates ("in an hour",
+    ///   "tomorrow at 9") resolve. Kept out of the instructions so cached sessions stay valid.
+    init(message: Message, model: SystemLanguageModel, includesTime: Bool = false) async throws {
         var text = message.content
+        if includesTime {
+            text += "\n\n(Sent \(message.createdAt.formatted(.dateTime.weekday(.wide).day().month(.wide).year().hour().minute())), \(TimeZone.current.identifier))"
+        }
         var images: [CGImage] = []
         var files: [RawDataAttachment] = []
 

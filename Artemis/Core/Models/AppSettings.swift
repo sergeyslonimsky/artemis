@@ -13,6 +13,8 @@ public struct AppSettings: Identifiable, Codable, Equatable, Sendable {
     public var cloudPolicy: CloudPolicy
     public var onDeviceEnabled: Bool
     public var onDeviceTitles: Bool
+    /// Let the on-device model read Calendar and Reminders and draft new entries.
+    public var personalDataTools: Bool
 
     public init(
         id: Int64 = 1,
@@ -24,7 +26,8 @@ public struct AppSettings: Identifiable, Codable, Equatable, Sendable {
         routingMode: RoutingMode = .auto,
         cloudPolicy: CloudPolicy = .alwaysAsk,
         onDeviceEnabled: Bool = true,
-        onDeviceTitles: Bool = true
+        onDeviceTitles: Bool = true,
+        personalDataTools: Bool = true
     ) {
         self.id = id
         self.defaultProviderId = defaultProviderId
@@ -36,6 +39,7 @@ public struct AppSettings: Identifiable, Codable, Equatable, Sendable {
         self.cloudPolicy = cloudPolicy
         self.onDeviceEnabled = onDeviceEnabled
         self.onDeviceTitles = onDeviceTitles
+        self.personalDataTools = personalDataTools
     }
 }
 
@@ -54,6 +58,7 @@ extension AppSettings: FetchableRecord, PersistableRecord, TableRecord {
         public static let cloudPolicy = Column("cloud_policy")
         public static let onDeviceEnabled = Column("on_device_enabled")
         public static let onDeviceTitles = Column("on_device_titles")
+        public static let personalDataTools = Column("personal_data_tools")
     }
 
     public func encode(to container: inout PersistenceContainer) throws {
@@ -67,6 +72,7 @@ extension AppSettings: FetchableRecord, PersistableRecord, TableRecord {
         container[Columns.cloudPolicy] = cloudPolicy.rawValue
         container[Columns.onDeviceEnabled] = onDeviceEnabled ? 1 : 0
         container[Columns.onDeviceTitles] = onDeviceTitles ? 1 : 0
+        container[Columns.personalDataTools] = personalDataTools ? 1 : 0
     }
 
     public init(row: Row) throws {
@@ -85,5 +91,7 @@ extension AppSettings: FetchableRecord, PersistableRecord, TableRecord {
         onDeviceEnabled = onDeviceInt != 0
         let titlesInt: Int = row[Columns.onDeviceTitles]
         onDeviceTitles = titlesInt != 0
+        let toolsInt: Int = row[Columns.personalDataTools]
+        personalDataTools = toolsInt != 0
     }
 }

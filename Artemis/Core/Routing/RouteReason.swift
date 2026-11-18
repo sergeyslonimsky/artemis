@@ -21,6 +21,7 @@ public enum RouteReason: String, Codable, Sendable {
     case simple
     case writing
     case deviceAction = "device_action"
+    case personalData = "personal_data"
     case freshInformation = "fresh_information"
     case complexReasoning = "complex_reasoning"
     case math
@@ -39,7 +40,7 @@ public enum RouteReason: String, Codable, Sendable {
              .longInput, .onDeviceUnavailable, .freshInformation, .complexReasoning, .math, .code, .longForm,
              .onDeviceFailed, .onDeviceDeclined:
             true
-        case .userSelectedOnDevice, .noCloudProvider, .smallTalk, .cloudCantReadAttachment, .simple, .writing, .deviceAction:
+        case .userSelectedOnDevice, .noCloudProvider, .smallTalk, .cloudCantReadAttachment, .personalData, .simple, .writing, .deviceAction:
             false
         }
     }
@@ -60,6 +61,7 @@ public enum RouteReason: String, Codable, Sendable {
         case .simple: "a simple question"
         case .writing: "a writing task"
         case .deviceAction: "device actions aren't possible from chat"
+        case .personalData: "it uses your calendar or reminders, which stay on this device"
         case .freshInformation: "it needs up-to-date information"
         case .complexReasoning: "it needs complex reasoning"
         case .math: "it involves calculations"

@@ -53,6 +53,8 @@ public struct Message: Identifiable, Codable, Equatable, Sendable {
     public var model: String?
     /// Why the router picked `backend` (or why consent is asked).
     public var routeReason: RouteReason?
+    /// Personal data the reply used and the actions it proposed.
+    public var extras: MessageExtras
 
     public init(
         id: String = UUID().uuidString.lowercased(),
@@ -69,7 +71,8 @@ public struct Message: Identifiable, Codable, Equatable, Sendable {
         backend: BackendKind? = nil,
         providerId: String? = nil,
         model: String? = nil,
-        routeReason: RouteReason? = nil
+        routeReason: RouteReason? = nil,
+        extras: MessageExtras = MessageExtras()
     ) {
         self.id = id
         self.chatId = chatId
@@ -86,6 +89,7 @@ public struct Message: Identifiable, Codable, Equatable, Sendable {
         self.providerId = providerId
         self.model = model
         self.routeReason = routeReason
+        self.extras = extras
     }
 }
 
@@ -110,6 +114,7 @@ extension Message: FetchableRecord, PersistableRecord, TableRecord {
         public static let providerId = Column("provider_id")
         public static let model = Column("model")
         public static let routeReason = Column("route_reason")
+        public static let extras = Column("extras")
     }
 
     public func encode(to container: inout PersistenceContainer) throws {
@@ -126,6 +131,7 @@ extension Message: FetchableRecord, PersistableRecord, TableRecord {
         container[Columns.providerId] = providerId
         container[Columns.model] = model
         container[Columns.routeReason] = routeReason?.rawValue
+        container[Columns.extras] = extras.isEmpty ? nil : String(data: try JSONEncoder().encode(extras), encoding: .utf8)
 
         if let stats = stats {
             container[Columns.tokens] = stats.tokens
@@ -157,6 +163,8 @@ extension Message: FetchableRecord, PersistableRecord, TableRecord {
         model = row[Columns.model]
         let reasonRaw: String? = row[Columns.routeReason]
         routeReason = reasonRaw.flatMap(RouteReason.init(rawValue:))
+        let extrasJSON: String? = row[Columns.extras]
+        extras = extrasJSON.flatMap { try? JSONDecoder().decode(MessageExtras.self, from: Data($0.utf8)) } ?? MessageExtras()
 
         if let tokens: Int = row[Columns.tokens] {
             let estimated: Int? = row[Columns.tokensEstimated]

@@ -281,6 +281,25 @@ ALTER TABLE providers ADD COLUMN kind TEXT NOT NULL DEFAULT 'custom';
 - [ ] UI пресетов и system prompt.
 - DoD: все возможности доступны из интерфейса, без мёртвых настроек.
 
+### Этап 4.5 — Личные данные через инструменты on-device модели
+
+Foundation Models tool calling: модель сама вызывает инструменты, код работает в приложении, данные не покидают
+устройство. Первая итерация — Календарь и Напоминания (EventKit).
+
+- [x] Инструменты (≤ 3, компактный вывод — бюджет контекста):
+      `getCalendarEvents(startDate, days)`, `getReminders(withinDays)`,
+      `draftEventOrReminder(kind, title, date, durationMinutes)` — только черновик, модель ничего не записывает.
+- [x] Черновики → карточка под ответом «Add to Calendar / Add Reminder · Dismiss»; запись в EventKit только по нажатию.
+- [x] Метка «Checked your calendar / reminders» под ответом; «Checking your calendar…» во время вызова.
+- [x] Разрешения EventKit (full access) по первому использованию; `NSCalendarsFullAccessUsageDescription`,
+      `NSRemindersFullAccessUsageDescription`; тумблер «Calendar & Reminders» в Settings → On-device model.
+- [x] Роутер: категория `personalData` (расписание, события, напоминания) — всегда on-device.
+- [x] Приватность: ответы, построенные на личных данных, не уходят облачному провайдеру в истории
+      (заменяются пометкой).
+- [x] Миграция v11: `messages.extras` (JSON: использованные инструменты, черновики и их статус),
+      `settings.personal_data_tools`.
+- Дальше (не в этой итерации): Контакты, местоположение + WeatherKit, HealthKit.
+
 ### Этап 5 — Тесты
 
 - [ ] Тестовый таргет в `project.yml`.

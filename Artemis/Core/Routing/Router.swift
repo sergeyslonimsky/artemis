@@ -172,6 +172,7 @@ enum RequestCategory {
     case simpleQuestion
     case writing
     case deviceAction
+    case personalData
     case math
     case freshInformation
     case complexReasoning
@@ -195,7 +196,9 @@ enum RequestClassifier {
         - smallTalk: greetings, thanks, chit-chat.
         - simpleQuestion: a short factual or everyday question with a well-known, stable answer.
         - writing: rewrite, summarize, translate between common languages, fix grammar, or draft a short text the user provides context for.
-        - deviceAction: asks to set an alarm, timer or reminder, send a message, make a call, or change a setting.
+        - personalData: about the user's own schedule, calendar events, meetings, plans or reminders/to-dos, \
+        including adding an event or a reminder.
+        - deviceAction: asks to set an alarm or timer, send a message, make a call, or change a setting.
         - math: any calculation, unit conversion with numbers, percentages, equations or word problems.
         - freshInformation: needs the internet or current data: news, weather, prices, scores, recent events, a specific website.
         - complexReasoning: multi-step math, logic puzzles, planning, careful analysis or comparison of options.
@@ -206,6 +209,8 @@ enum RequestClassifier {
         "thanks, that helps" -> smallTalk
         "how many legs does a spider have" -> simpleQuestion
         "make this email sound more polite: ..." -> writing
+        "what do I have tomorrow" -> personalData
+        "remind me to buy milk at 6pm" -> personalData
         "wake me up at 7" -> deviceAction
         "what is 17% of 2,340" -> math
         "what's the weather in Warsaw tomorrow" -> freshInformation
@@ -238,6 +243,7 @@ enum RequestClassifier {
         case .simpleQuestion: .onDevice(.simple)
         case .writing: .onDevice(.writing)
         case .deviceAction: .onDevice(.deviceAction)
+        case .personalData: .onDevice(.personalData)
         case .math: .cloud(.math)
         case .freshInformation: .cloud(.freshInformation)
         case .complexReasoning: .cloud(.complexReasoning)

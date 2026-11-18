@@ -218,13 +218,15 @@ extension AppDatabase {
         reasoning: String,
         status: MessageStatus,
         error: String? = nil,
-        stats: MessageStats?
+        stats: MessageStats?,
+        extras: MessageExtras = MessageExtras()
     ) throws {
+        let extrasJSON = extras.isEmpty ? nil : String(data: try JSONEncoder().encode(extras), encoding: .utf8)
         try dbWriter.write { db in
             try db.execute(
                 sql: """
                 UPDATE messages
-                SET content = ?, reasoning = ?, status = ?, error = ?,
+                SET content = ?, reasoning = ?, status = ?, error = ?, extras = ?,
                     tokens = ?, tokens_estimated = ?, duration_ms = ?
                 WHERE id = ?
                 """,
@@ -233,12 +235,24 @@ extension AppDatabase {
                     reasoning,
                     status.rawValue,
                     error,
+                    extrasJSON,
                     stats?.tokens,
                     stats.map { $0.isEstimated ? 1 : 0 },
                     stats?.durationMs,
                     id
                 ]
             )
+        }
+    }
+
+    /// Marks a drafted event/reminder as added or dismissed.
+    public func setDraftStatus(messageId: String, draftId: String, status: ActionDraft.Status) throws {
+        try dbWriter.write { db in
+            guard var message = try Message.fetchOne(db, id: messageId) else { return }
+            guard let index = message.extras.drafts.firstIndex(where: { $0.id == draftId }) else { return }
+            message.extras.drafts[index].status = status
+            let json = String(data: try JSONEncoder().encode(message.extras), encoding: .utf8)
+            try db.execute(sql: "UPDATE messages SET extras = ? WHERE id = ?", arguments: [json, messageId])
         }
     }
 

@@ -255,6 +255,14 @@ public final class AppDatabase: Sendable {
             try db.execute(sql: "ALTER TABLE providers ADD COLUMN model_capabilities TEXT NOT NULL DEFAULT '{}'")
         }
 
+        // Migration 11: personal-data tools (extras on replies, settings toggle)
+        migrator.registerMigration("v11_personal_data_tools") { db in
+            try db.execute(sql: """
+            ALTER TABLE messages ADD COLUMN extras TEXT;
+            ALTER TABLE settings ADD COLUMN personal_data_tools INTEGER NOT NULL DEFAULT 1;
+            """)
+        }
+
         return migrator
     }
 

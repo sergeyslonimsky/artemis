@@ -177,7 +177,9 @@ public struct ChatView: View {
 
     private func bubble(for message: Message) -> some View {
         let canAct = message.role == .assistant && !isBusy
+        // Replies built on calendar/reminders aren't offered to the cloud: it would only see a redaction.
         let canAskCloud = canAct && message.backend == .onDevice && cloudTarget != nil
+            && message.extras.personalDataUsed.isEmpty
         return MessageBubbleView(
             message: message,
             live: chatService.liveState(chatId: chatId, messageId: message.id),
@@ -185,7 +187,8 @@ public struct ChatView: View {
             onRegenerate: canAct ? { perform { try chatService.regenerate(chatId: chatId, fromMessageId: message.id, route: routeRequest, preset: selectedPreset) } } : nil,
             onAskCloud: canAskCloud ? { perform { try chatService.askCloud(chatId: chatId, replacing: message.id, route: routeRequest, preset: selectedPreset) } } : nil,
             onConsent: { choice in resolveConsent(message, choice: choice) },
-            cloudAvailable: cloudTarget != nil
+            cloudAvailable: cloudTarget != nil,
+            onDraft: { draft, confirm in resolveDraft(draft, in: message, confirm: confirm) }
         )
     }
 
@@ -369,6 +372,23 @@ public struct ChatView: View {
                 route: routeRequest,
                 preset: selectedPreset
             )
+        }
+    }
+
+    /// Saves a drafted event/reminder to EventKit only after the user taps Add.
+    private func resolveDraft(_ draft: ActionDraft, in message: Message, confirm: Bool) {
+        guard confirm else {
+            try? database.setDraftStatus(messageId: message.id, draftId: draft.id, status: .dismissed)
+            return
+        }
+        Task {
+            do {
+                try await PersonalDataStore.shared.save(draft)
+                try database.setDraftStatus(messageId: message.id, draftId: draft.id, status: .added)
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 

@@ -17,6 +17,8 @@ public struct ChatRunState: Equatable, Sendable {
     public var messageId: String?
     public var content: String = ""
     public var reasoning: String = ""
+    /// Personal-data tool the on-device model is using right now ("Checking your calendar…").
+    public var activity: PersonalDataSource?
 
     public var isActive: Bool { phase != .finished }
 }
@@ -166,8 +168,9 @@ public final class ChatService {
         let chatAllowsCloud = (try? database.fetchChat(id: chatId))?.cloudAllowed ?? false
         switch settings.cloudPolicy.apply(to: decision, mode: route.mode, chatAllowsCloud: chatAllowsCloud) {
         case .proceed(let decision):
-            // Escalating is pointless when the cloud model is the reason the turn stayed local.
-            let mayEscalate = route.mode == .auto && decision.reason != .cloudCantReadAttachment
+            // Escalating is pointless when the cloud model is why the turn stayed local, or when the
+            // turn is about personal data the cloud can't see.
+            let mayEscalate = route.mode == .auto && ![.cloudCantReadAttachment, .personalData].contains(decision.reason)
             await reply(chatId: chatId, token: token, decision: decision, route: route, preset: preset, mayEscalate: mayEscalate)
         case .keepOnDevice(let reason):
             await reply(chatId: chatId, token: token, decision: .onDevice(reason), route: route, preset: preset, mayEscalate: false)
@@ -213,12 +216,17 @@ public final class ChatService {
         runs[chatId]?.reasoning = ""
 
         let job = ReplyJob(database: database, chatId: chatId, messageId: placeholder.id, backend: backend, preset: preset)
-        let outcome = await job.run { [weak self] batch in
-            await self?.apply(batch, chatId: chatId, token: token)
-        }
+        let outcome = await job.run(
+            onBatch: { [weak self] batch in
+                await self?.apply(batch, chatId: chatId, token: token)
+            },
+            onActivity: { [weak self] source in
+                await self?.setActivity(source, chatId: chatId, token: token)
+            }
+        )
         guard isCurrent(chatId: chatId, token: token) else { return }
 
-        if mayEscalate, decision.backend == .onDevice, route.cloud != nil, !Task.isCancelled {
+        if mayEscalate, decision.backend == .onDevice, route.cloud != nil, outcome.extras.personalDataUsed.isEmpty, !Task.isCancelled {
             var escalationReason: RouteReason?
             if outcome.onDeviceError != nil {
                 escalationReason = .onDeviceFailed
@@ -329,8 +337,14 @@ public final class ChatService {
         runs[chatId]?.token == token
     }
 
+    private func setActivity(_ source: PersonalDataSource?, chatId: String, token: UUID) {
+        guard isCurrent(chatId: chatId, token: token) else { return }
+        runs[chatId]?.activity = source
+    }
+
     private func apply(_ batch: StreamBatcher.Batch, chatId: String, token: UUID) {
         guard isCurrent(chatId: chatId, token: token) else { return }
+        if !batch.content.isEmpty { runs[chatId]?.activity = nil }
         runs[chatId]?.content += batch.content
         runs[chatId]?.reasoning += batch.reasoning
     }
@@ -401,6 +415,7 @@ struct ReplyJob: Sendable {
         var lastUserPrompt = ""
         /// Set when the on-device model failed; such failures may escalate to the cloud.
         var onDeviceError: OnDeviceError?
+        var extras = MessageExtras()
     }
 
     let database: AppDatabase
@@ -412,19 +427,25 @@ struct ReplyJob: Sendable {
     private static let logger = Logger(subsystem: "com.artemis.ios", category: "ReplyJob")
 
     @concurrent
-    func run(onBatch: @escaping @Sendable (StreamBatcher.Batch) async -> Void) async -> Outcome {
+    func run(
+        onBatch: @escaping @Sendable (StreamBatcher.Batch) async -> Void,
+        onActivity: @escaping @Sendable (PersonalDataSource?) async -> Void = { _ in }
+    ) async -> Outcome {
         var outcome = Outcome()
         var batcher = StreamBatcher()
 
         do {
+            let isCloud = backend.descriptor.kind == .cloud
             let history = try database.fetchMessages(chatId: chatId, includeAttachmentData: true)
                 .filter { $0.id != messageId && Self.belongsInContext($0) }
+                .map { isCloud ? Self.withoutPersonalData($0) : $0 }
             outcome.lastUserPrompt = history.last(where: { $0.role == .user })?.content ?? ""
 
             let settings = try database.fetchSettings()
             var turn = ChatTurn(messages: history, systemPrompt: settings.systemPrompt, preset: preset)
             turn.conversationId = chatId
             turn.replyId = messageId
+            turn.allowsPersonalData = !isCloud && settings.personalDataTools
 
             for try await event in backend.stream(turn) {
                 try Task.checkCancellation()
@@ -439,6 +460,13 @@ struct ReplyJob: Sendable {
                     outcome.stats = MessageStats(tokens: tokens, isEstimated: isEstimated, durationMs: durationMs)
                 case .error(let message):
                     throw ReplyError.provider(message)
+                case .toolStarted(let source):
+                    if !outcome.extras.personalDataUsed.contains(source) {
+                        outcome.extras.personalDataUsed.append(source)
+                    }
+                    await onActivity(source)
+                case .actionDraft(let draft):
+                    outcome.extras.drafts.append(draft)
                 }
             }
             // Backends may end the stream quietly when cancelled.
@@ -466,12 +494,22 @@ struct ReplyJob: Sendable {
                 reasoning: outcome.reasoning,
                 status: outcome.status,
                 error: outcome.error,
-                stats: outcome.stats
+                stats: outcome.stats,
+                extras: outcome.extras
             )
         } catch {
             Self.logger.error("Failed to persist reply \(messageId, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
         return outcome
+    }
+
+    /// Replies built from the user's calendar or reminders stay on the device: the cloud provider
+    /// sees that such a reply existed, not what it said.
+    static func withoutPersonalData(_ message: Message) -> Message {
+        guard message.role == .assistant, !message.extras.personalDataUsed.isEmpty else { return message }
+        var redacted = message
+        redacted.content = "[An on-device answer based on the user's private calendar/reminders data, not shared.]"
+        return redacted
     }
 
     /// Failed or empty assistant turns carry no useful context for the model.

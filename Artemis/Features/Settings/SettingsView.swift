@@ -72,10 +72,12 @@ public struct SettingsView: View {
                         .disabled(!onDeviceStatus.isAvailable)
                     Toggle("Generate chat titles on-device", isOn: settingBinding(\.onDeviceTitles))
                         .disabled(!onDeviceStatus.isAvailable || !settings.onDeviceEnabled)
+                    Toggle("Calendar & Reminders", isOn: settingBinding(\.personalDataTools))
+                        .disabled(!onDeviceStatus.isAvailable || !settings.onDeviceEnabled)
                 } header: {
                     Text("On-device model")
                 } footer: {
-                    Text(onDeviceStatus.detail)
+                    Text(onDeviceStatus.detail + " With Calendar & Reminders on, it can read your schedule and draft events or reminders you confirm — this data never leaves the device.")
                 }
 
                 Section {
