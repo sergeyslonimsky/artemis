@@ -1,0 +1,9 @@
+// Signing and identity shared by the app and its tests.
+//
+// To run on a device, copy Local.xcconfig.example to Local.xcconfig (it is git-ignored) and set
+// your own team and a bundle identifier you control. The simulator needs neither.
+
+DEVELOPMENT_TEAM =
+APP_BUNDLE_ID = com.example.artemis
+
+#include? "Local.xcconfig"

@@ -1,21 +1,47 @@
-# Xcode
+# macOS
 .DS_Store
+
+# Xcode build output and per-user state
 build/
 DerivedData/
-*.xcuserstate
-project.xcworkspace/
+*.xcresult
 xcuserdata/
+*.xcuserstate
 *.moved-aside
-*.ipa
-*.dSYM.zip
-*.dSYM
+*.xccheckout
+*.xcscmblueprint
+# The workspace inside the project is generated; only its shared package pins are kept.
+*.xcodeproj/project.xcworkspace/*
+!*.xcodeproj/project.xcworkspace/xcshareddata/
+*.xcodeproj/project.xcworkspace/xcshareddata/*
+!*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/*
+!*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 
-# SPM
+# Archives and symbols
+*.ipa
+*.dSYM
+*.dSYM.zip
+
+# Swift Package Manager
 .build/
 .swiftpm/
 
-# Fastlane / CocoaPods if any
-Pods/
-fastlane/report.xml
-fastlane/Preview.html
-fastlane/screenshots
+# Your signing settings (see Config/Local.xcconfig.example)
+Config/Local.xcconfig
+
+# Editors and tools
+.idea/
+.vscode/
+.claude/settings.local.json
+*.swp
+
+# Local working notes
+PLAN.md
+
+# Secrets, should any ever appear
+.env
+.env.*
+*.p12
+*.mobileprovision
+*.cer

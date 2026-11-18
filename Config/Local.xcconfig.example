@@ -1,0 +1,8 @@
+// Your signing settings. Copy this file to Local.xcconfig in the same folder; that copy is
+// git-ignored, so your team stays out of the repository.
+
+// Your Apple Developer team ID: Xcode › Settings › Accounts, or developer.apple.com › Membership.
+DEVELOPMENT_TEAM = ABCDE12345
+
+// Must be unique to you, e.g. a reverse domain you own.
+APP_BUNDLE_ID = com.yourname.artemis

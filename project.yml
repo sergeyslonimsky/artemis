@@ -1,6 +1,5 @@
 name: Artemis
 options:
-  bundleIdPrefix: com.artemis
   createIntermediateGroups: true
 
 packages:
@@ -28,6 +27,9 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSAlarmKitUsageDescription: "Sets the alarms and timers you confirm in a chat."
+    configFiles:
+      Debug: Config/Base.xcconfig
+      Release: Config/Base.xcconfig
     entitlements:
       path: Artemis/Artemis.entitlements
       properties:
@@ -39,9 +41,9 @@ targets:
     settings:
       base:
         PRODUCT_NAME: Artemis
-        PRODUCT_BUNDLE_IDENTIFIER: com.artemis.ios
+        # Team and identifier come from Config/Base.xcconfig (and your Config/Local.xcconfig).
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID)
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: PLFAQZ6LX2
         INFOPLIST_KEY_CFBundleDisplayName: "Artemis"
         GENERATE_INFOPLIST_FILE: YES
         CURRENT_PROJECT_VERSION: 1
@@ -70,10 +72,12 @@ targets:
       - path: ArtemisTests
     dependencies:
       - target: Artemis
+    configFiles:
+      Debug: Config/Base.xcconfig
+      Release: Config/Base.xcconfig
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.artemis.ios.tests
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID).tests
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_VERSION: "6.0"
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: PLFAQZ6LX2
