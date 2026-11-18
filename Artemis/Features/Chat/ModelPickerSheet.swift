@@ -8,6 +8,9 @@ struct ModelPickerSheet: View {
     let selection: ModelRef?
     let favorites: [ModelRef]
     let recents: [ModelRef]
+    let presets: [Preset]
+    let presetId: String?
+    let onSelectPreset: (Preset?) -> Void
     let onModeChange: (RoutingMode) -> Void
     let onSelect: (Provider, String) -> Void
     let onToggleFavorite: (ModelRef) -> Void
@@ -29,6 +32,20 @@ struct ModelPickerSheet: View {
                         .listRowBackground(Color.clear)
                     } footer: {
                         Text(modeDescription)
+                    }
+
+                    if !presets.isEmpty {
+                        Section {
+                            Picker("Preset", selection: Binding(
+                                get: { presetId },
+                                set: { id in onSelectPreset(presets.first { $0.id == id }) }
+                            )) {
+                                Text("None").tag(String?.none)
+                                ForEach(presets) { preset in
+                                    Text(preset.title).tag(Optional(preset.id))
+                                }
+                            }
+                        }
                     }
                 }
 

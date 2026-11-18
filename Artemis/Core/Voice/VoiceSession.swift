@@ -469,7 +469,11 @@ final class VoiceSession: Identifiable {
         return result
     }
 
+    /// "English (United States)". Built from language and region only: the current locale's
+    /// identifier can carry extensions (e.g. `en_US@rg=plzzzz`) that don't localize.
     static func name(of locale: Locale) -> String {
-        Locale.current.localizedString(forIdentifier: locale.identifier) ?? locale.identifier
+        let code = locale.language.languageCode?.identifier ?? locale.identifier
+        let identifier = locale.language.region.map { "\(code)-\($0.identifier)" } ?? code
+        return Locale.current.localizedString(forIdentifier: identifier) ?? identifier
     }
 }

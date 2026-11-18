@@ -277,10 +277,13 @@ ALTER TABLE providers ADD COLUMN kind TEXT NOT NULL DEFAULT 'custom';
 
 - [x] Route sheet: сегмент режима, поиск по моделям всех провайдеров, «Favorites» (свайп/контекстное меню,
       миграция v14) и «Recent» (из последних чатов), бейджи 🌐 / картинки / free, имя модели без префикса вендора.
-- [ ] Новая структура Settings (On-device / Cloud providers / Prompts).
+- [x] Новая структура Settings: корень со строками-разделами (Models: On-device / Cloud providers / Routing;
+      Assistant: Instructions / Presets; Device: Device data & actions / Voice & dictation), у каждого своя страница.
+      Убран неиспользуемый «Debug Mode».
 - [x] Шаблоны провайдеров в «Add provider»: выбор OpenRouter / OpenAI / Mistral / Custom, для OpenRouter —
       «Only free models» (фильтр `:free`, миграция v13); default-провайдер свайпом вправо.
-- [ ] UI пресетов и system prompt.
+- [x] Общие инструкции (system prompt); пресеты: создание/редактирование (имя, инструкции, температура),
+      default свайпом, выбор пресета для чата в листе модели.
 - DoD: все возможности доступны из интерфейса, без мёртвых настроек.
 
 ### Этап 4.5 — Личные данные через инструменты on-device модели

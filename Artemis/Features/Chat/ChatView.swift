@@ -27,6 +27,7 @@ public struct ChatView: View {
     /// The user picked a model in this chat; until then a draft follows the defaults.
     @State private var userPickedModel = false
     @State private var recentModels: [ModelRef] = []
+    @State private var presets: [Preset] = []
 
     private let chatService = ChatService.shared
     private let database = AppDatabase.shared
@@ -162,6 +163,7 @@ public struct ChatView: View {
             if showing {
                 onDeviceStatus = .current
                 recentModels = (try? database.recentModels()) ?? []
+                presets = (try? database.fetchPresets()) ?? []
             }
         }
     }
@@ -458,6 +460,9 @@ public struct ChatView: View {
             selection: selectedProviderId.map { ModelRef(providerId: $0, model: selectedModel) },
             favorites: settings.favoriteModels,
             recents: recentModels,
+            presets: presets,
+            presetId: selectedPreset?.id,
+            onSelectPreset: { selectedPreset = $0 },
             onModeChange: setRoutingMode,
             onSelect: { provider, model in
                 selectModel(model, of: provider)
