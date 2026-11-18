@@ -9,6 +9,8 @@ public struct ComposerView: View {
     public let currentPresetTitle: String?
     public let onSend: () -> Void
     public let onStop: () -> Void
+    /// Called when the text field gains focus (a cue that a request is coming).
+    public var onFocus: (() -> Void)?
 
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
     @State private var isShowingFileImporter: Bool = false
@@ -22,7 +24,8 @@ public struct ComposerView: View {
         isBusy: Bool,
         currentPresetTitle: String? = nil,
         onSend: @escaping () -> Void,
-        onStop: @escaping () -> Void
+        onStop: @escaping () -> Void,
+        onFocus: (() -> Void)? = nil
     ) {
         self._text = text
         self._attachments = attachments
@@ -30,6 +33,7 @@ public struct ComposerView: View {
         self.currentPresetTitle = currentPresetTitle
         self.onSend = onSend
         self.onStop = onStop
+        self.onFocus = onFocus
     }
 
     private var canSend: Bool {
@@ -104,6 +108,9 @@ public struct ComposerView: View {
         .fullScreenCover(isPresented: $isShowingCamera) {
             CameraPicker(onCapture: handleCameraPhoto)
                 .ignoresSafeArea()
+        }
+        .onChange(of: isFocused) { _, focused in
+            if focused { onFocus?() }
         }
         .onChange(of: selectedPhotoItems) { _, items in
             handlePhotoSelection(items)

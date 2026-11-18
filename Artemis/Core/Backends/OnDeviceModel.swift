@@ -66,9 +66,15 @@ public enum OnDeviceModel {
             .sorted()
     }
 
-    /// Loads the model into memory ahead of the first request.
+    @MainActor private static var lastPrewarm: Date?
+
+    /// Loads the model into memory ahead of the first request. Repeated calls within a short
+    /// window are ignored (focus can toggle often).
+    @MainActor
     public static func prewarm() {
         guard OnDeviceModelStatus.current.isAvailable else { return }
-        LanguageModelSession().prewarm()
+        if let lastPrewarm, Date().timeIntervalSince(lastPrewarm) < 30 { return }
+        lastPrewarm = Date()
+        LanguageModelSession(instructions: AppleOnDeviceBackend.baseInstructions()).prewarm()
     }
 }

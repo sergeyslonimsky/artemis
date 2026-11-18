@@ -68,7 +68,6 @@ ChatService (@MainActor @Observable, orchestrator)
    - есть файл, тип которого локальная модель не поддерживает (`supportsDataAttachmentType`). Картинки и текстовые
      файлы идут локально — решение по тексту запроса принимает классификатор (он знает о вложении);
    - оценка токенов истории + запроса > бюджета on-device (≈ 4096 всего, оставляем ~1000 на ответ);
-   - язык запроса (`NLLanguageRecognizer`) не поддерживается `SystemLanguageModel.default.supportsLocale`;
    - on-device модель недоступна.
 2. **Правила → локально**: очень короткие/тривиальные запросы (приветствие, «thanks», переформулируй/переведи
    короткий текст) — экономим вызов классификатора.
@@ -243,8 +242,8 @@ ALTER TABLE providers ADD COLUMN kind TEXT NOT NULL DEFAULT 'custom';
 - [x] `Router`: явные режимы → правила (`RoutingRules`) → on-device классификатор (`@Generable RequestCategory`,
       greedy, таймаут 4 с, при сбое — on-device). Классификатор знает о вложениях; без облака решение «нужно облако»
       сохраняется как причина у локального ответа.
-- [x] Правила Auto: неподдерживаемый тип файла (`supportsDataAttachmentType`), неподдерживаемый язык
-      (`NLLanguageRecognizer` + `supportsLocale`), длинный ввод, small talk. Картинки и текстовые файлы — локально.
+- [x] Правила Auto: неподдерживаемый тип файла (`supportsDataAttachmentType`), язык вне `supportsLocale`
+      (русский/польский модель понимает, но заметно хуже), длинный ввод, small talk. Картинки и текстовые файлы — локально.
 - [x] `CloudPolicy.apply` (`deny` / `alwaysAsk` / `alwaysAllow`); подтверждение — один раз на чат (`chats.cloud_allowed`,
       миграция v9), карточка `awaiting_consent` в ленте.
 - [x] Автоэскалация после ошибки on-device (через ту же политику), кнопка «Ask cloud», причина маршрута в поповере
@@ -253,9 +252,16 @@ ALTER TABLE providers ADD COLUMN kind TEXT NOT NULL DEFAULT 'custom';
       для моделей с `tools`; служебные запросы без поиска.
 - [x] Провайдер нельзя сохранить без моделей; ручной ввод model ID.
 - [x] Settings → Routing: режим по умолчанию и политика облака; список языков on-device модели.
+- [x] По рекомендациям Apple (ресёрч документации Foundation Models, iOS 27):
+      OCR через Vision (`RecognizeTextRequest`) для картинок → распознанный текст идёт в промпт on-device;
+      категория `math` → облако; детектор текстового отказа (отдельная greedy-сессия) → эскалация
+      `on_device_declined`; переиспользование `LanguageModelSession` между on-device ходами чата
+      (`OnDeviceSessionCache`); prewarm при фокусе на поле ввода.
 - [x] Облако: возможности картинок/PDF по модели (`image_input`/`pdf_input`), вложения прошлых сообщений,
       которые модель не принимает, → текстовая пометка; повтор без прошлых вложений, если провайдер отклонил
       запрос до первого токена; читаемые ошибки провайдера. Камера во вложениях.
+- [ ] Private Cloud Compute (`PrivateCloudComputeLanguageModel`) как уровень между on-device и BYOK —
+      нужен managed entitlement от Apple; квоты, офлайн-фолбэк.
 
 ### Этап 4 — UI и настройки
 

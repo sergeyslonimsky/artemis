@@ -11,6 +11,10 @@ public struct ChatTurn: Sendable {
     public var usesAssistantPersona: Bool
     /// Utility requests never need the internet; skipping search keeps them fast and cheap.
     public var allowsWebSearch: Bool
+    /// Chat and reply ids for a conversational turn, letting a backend keep state between turns
+    /// (the on-device model reuses its session). `nil` for one-off utility requests.
+    public var conversationId: String?
+    public var replyId: String?
 
     public init(
         messages: [Message],

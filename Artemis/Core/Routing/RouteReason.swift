@@ -23,19 +23,21 @@ public enum RouteReason: String, Codable, Sendable {
     case deviceAction = "device_action"
     case freshInformation = "fresh_information"
     case complexReasoning = "complex_reasoning"
+    case math
     case code
     case longForm = "long_form"
 
     // Escalation after the on-device model failed
     case onDeviceFailed = "on_device_failed"
+    case onDeviceDeclined = "on_device_declined"
 
     /// The request would be better served by the cloud. On-device replies with such a reason
     /// were kept local only because the cloud was denied, declined or not configured.
     public var prefersCloud: Bool {
         switch self {
         case .userAskedCloud, .userSelectedCloud, .unsupportedAttachment, .unsupportedLanguage,
-             .longInput, .onDeviceUnavailable, .freshInformation, .complexReasoning, .code, .longForm,
-             .onDeviceFailed:
+             .longInput, .onDeviceUnavailable, .freshInformation, .complexReasoning, .math, .code, .longForm,
+             .onDeviceFailed, .onDeviceDeclined:
             true
         case .userSelectedOnDevice, .noCloudProvider, .smallTalk, .cloudCantReadAttachment, .simple, .writing, .deviceAction:
             false
@@ -60,9 +62,11 @@ public enum RouteReason: String, Codable, Sendable {
         case .deviceAction: "device actions aren't possible from chat"
         case .freshInformation: "it needs up-to-date information"
         case .complexReasoning: "it needs complex reasoning"
+        case .math: "it involves calculations"
         case .code: "it involves code"
         case .longForm: "it needs a long, detailed answer"
         case .onDeviceFailed: "the on-device model couldn't answer"
+        case .onDeviceDeclined: "the on-device model declined to answer"
         }
     }
 }

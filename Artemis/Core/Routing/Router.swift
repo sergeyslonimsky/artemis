@@ -83,8 +83,11 @@ public struct Router: Sendable {
 // MARK: - Rules
 
 /// Deterministic routing. Returns `nil` when the request has to be classified.
+///
+/// Languages outside `supportsLocale` go to the cloud: the model may answer them, but noticeably
+/// worse (Apple doesn't support e.g. Russian or Polish on-device).
 public struct RoutingRules: Sendable {
-    /// Whether the on-device model supports a language.
+    /// Whether the on-device model officially supports a language.
     public var supportsLanguage: @Sendable (Locale.LanguageCode) -> Bool
     public var onDeviceContextSize: Int
 
@@ -129,6 +132,15 @@ public struct RoutingRules: Sendable {
         return (message.content.utf8.count + textBytes) / 3 + otherCount * AppleOnDeviceBackend.estimatedTokensPerImage
     }
 
+    /// `nil` when the text is too short to tell reliably.
+    static func dominantLanguage(of text: String) -> Locale.LanguageCode? {
+        guard text.count >= 20 else { return nil }
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(text)
+        guard let language = recognizer.dominantLanguage, language != .undetermined else { return nil }
+        return Locale.LanguageCode(language.rawValue)
+    }
+
     /// Whether a cloud model with `capabilities` can take all of the message's attachments.
     static func accepts(_ message: Message, _ capabilities: ProviderCapabilities) -> Bool {
         message.attachments.allSatisfy { attachment in
@@ -140,15 +152,6 @@ public struct RoutingRules: Sendable {
     static func isTextDocument(_ attachment: Artemis.Attachment) -> Bool {
         guard attachment.kind == .document, let type = UTType(mimeType: attachment.mime) else { return false }
         return type.conforms(to: .text) || type.conforms(to: .json)
-    }
-
-    /// `nil` when the text is too short to tell reliably.
-    static func dominantLanguage(of text: String) -> Locale.LanguageCode? {
-        guard text.count >= 20 else { return nil }
-        let recognizer = NLLanguageRecognizer()
-        recognizer.processString(text)
-        guard let language = recognizer.dominantLanguage, language != .undetermined else { return nil }
-        return Locale.LanguageCode(language.rawValue)
     }
 
     /// Greetings and acknowledgements: a few words, no question, no numbers.
@@ -169,6 +172,7 @@ enum RequestCategory {
     case simpleQuestion
     case writing
     case deviceAction
+    case math
     case freshInformation
     case complexReasoning
     case code
@@ -192,6 +196,7 @@ enum RequestClassifier {
         - simpleQuestion: a short factual or everyday question with a well-known, stable answer.
         - writing: rewrite, summarize, translate between common languages, fix grammar, or draft a short text the user provides context for.
         - deviceAction: asks to set an alarm, timer or reminder, send a message, make a call, or change a setting.
+        - math: any calculation, unit conversion with numbers, percentages, equations or word problems.
         - freshInformation: needs the internet or current data: news, weather, prices, scores, recent events, a specific website.
         - complexReasoning: multi-step math, logic puzzles, planning, careful analysis or comparison of options.
         - code: writing, explaining or debugging code, or technical configuration.
@@ -202,6 +207,7 @@ enum RequestClassifier {
         "how many legs does a spider have" -> simpleQuestion
         "make this email sound more polite: ..." -> writing
         "wake me up at 7" -> deviceAction
+        "what is 17% of 2,340" -> math
         "what's the weather in Warsaw tomorrow" -> freshInformation
         "who won the match yesterday" -> freshInformation
         "if a train leaves at 3pm at 80 km/h and another at 4pm at 100 km/h, when does the second catch up" -> complexReasoning
@@ -232,6 +238,7 @@ enum RequestClassifier {
         case .simpleQuestion: .onDevice(.simple)
         case .writing: .onDevice(.writing)
         case .deviceAction: .onDevice(.deviceAction)
+        case .math: .cloud(.math)
         case .freshInformation: .cloud(.freshInformation)
         case .complexReasoning: .cloud(.complexReasoning)
         case .code: .cloud(.code)
@@ -263,7 +270,7 @@ enum RequestClassifier {
         return response.content.category
     }
 
-    private static func withTimeout<T: Sendable>(
+    static func withTimeout<T: Sendable>(
         _ duration: Duration,
         _ operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
@@ -276,6 +283,45 @@ enum RequestClassifier {
             defer { group.cancelAll() }
             guard let result = try await group.next() else { throw CancellationError() }
             return result
+        }
+    }
+}
+
+// MARK: - Refusal detection
+
+@Generable
+struct RefusalVerdict {
+    @Guide(description: "true only if the reply declines the request instead of answering it")
+    var isRefusal: Bool
+}
+
+/// Plain-text refusals ("I can't help with that") don't throw, so Apple suggests a second
+/// session that classifies the reply.
+enum RefusalDetector {
+    /// Refusals are short; long replies are answers, and checking them would only add latency.
+    static let maxCheckedLength = 600
+
+    private static let instructions = """
+        You check an assistant's reply. Decide whether it declines or refuses the user's request \
+        instead of answering it, for example "I can't help with that" or "I don't have access to that \
+        information". A reply that answers, even partially or with a caveat, is not a refusal.
+        """
+
+    static func isRefusal(_ reply: String) async -> Bool {
+        let reply = reply.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !reply.isEmpty, reply.count <= maxCheckedLength else { return false }
+        do {
+            return try await RequestClassifier.withTimeout(.seconds(3)) {
+                let session = LanguageModelSession(instructions: instructions)
+                let response = try await session.respond(
+                    to: "Reply:\n\"\"\"\n\(reply)\n\"\"\"",
+                    generating: RefusalVerdict.self,
+                    options: GenerationOptions(samplingMode: .greedy)
+                )
+                return response.content.isRefusal
+            }
+        } catch {
+            return false
         }
     }
 }

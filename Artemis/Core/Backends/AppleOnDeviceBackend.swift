@@ -77,23 +77,22 @@ public struct AppleOnDeviceBackend: ChatBackend {
     /// Images don't go through `tokenCount`; reserve a conservative amount for each.
     static let estimatedTokensPerImage = 600
 
-    /// A small model doesn't know where it runs and borrows capabilities from bigger assistants
-    /// in its training data, so its limits are spelled out explicitly.
+    /// A small model doesn't know where it runs and borrows capabilities from bigger assistants,
+    /// so its limits are stated once, calmly, after what it can do: a long list of "can't"s up
+    /// front made it refuse things it handles well (e.g. describing an image).
     static func baseInstructions(now: Date = Date()) -> String {
         let today = now.formatted(.dateTime.weekday(.wide).day().month(.wide).year())
         return """
-            You are Artemis, an assistant that runs entirely offline on the user's iPhone. Today is \(today).
+            You are Artemis, a helpful assistant running on the user's iPhone. Today is \(today).
 
-            You CANNOT:
-            - access the internet: no browsing, searching, news, weather, prices, or anything after your training data;
-            - take actions on the device or in apps: no alarms, timers, reminders, calendar events, messages, calls, or settings;
-            - remember other conversations.
+            You can read images and documents the user attaches, answer questions, explain things, \
+            write and edit text, translate, and summarize. Answer directly and helpfully, using Markdown \
+            when it helps.
 
-            When a request needs any of these, say in one sentence that you can't do it here and suggest asking \
-            a cloud model instead. Never pretend to have done it.
-
-            Answer accurately and concisely, using Markdown when it helps. If you are unsure about a fact, \
-            or can't read an image or handwriting clearly, say so instead of guessing.
+            You have no internet access and can't take actions on the device, such as setting alarms or \
+            reminders, sending messages, or making calls. Only when a request truly depends on one of these, \
+            say in one short sentence that you can't do that part, then help with everything else. \
+            Don't mention other models or services. If you're unsure about a fact, say so briefly.
             """
     }
 
@@ -132,15 +131,31 @@ public struct AppleOnDeviceBackend: ChatBackend {
 
         let request = try await PromptParts(message: last, model: model)
         let responseBudget = min(maxResponseTokens, model.contextSize / 4)
-        let transcript = try await buildTranscript(
-            instructions: instructions(for: turn),
-            history: Array(turn.messages.dropLast()),
-            promptText: request.text,
-            reservedTokens: responseBudget + request.images.count * estimatedTokensPerImage,
-            model: model
-        )
+        let reservedTokens = responseBudget + request.images.count * estimatedTokensPerImage
+        let instructions = instructions(for: turn)
+        let history = Array(turn.messages.dropLast())
 
-        let session = LanguageModelSession(model: model, transcript: transcript)
+        // Apple recommends one session per conversation: the model keeps its cache instead of
+        // re-reading the history. Reuse it while nothing changed since the last on-device turn.
+        var session: LanguageModelSession
+        if let conversationId = turn.conversationId,
+           let cached = await OnDeviceSessionCache.shared.take(
+               conversationId: conversationId,
+               historyIds: history.map(\.id),
+               instructions: instructions
+           ),
+           await fits(cached.transcript, promptText: request.text, reservedTokens: reservedTokens, model: model) {
+            session = cached
+        } else {
+            let transcript = try await buildTranscript(
+                instructions: instructions,
+                history: history,
+                promptText: request.text,
+                reservedTokens: reservedTokens,
+                model: model
+            )
+            session = LanguageModelSession(model: model, transcript: transcript)
+        }
         let options = GenerationOptions(
             temperature: turn.preset?.temperature,
             maximumResponseTokens: responseBudget
@@ -167,6 +182,15 @@ public struct AppleOnDeviceBackend: ChatBackend {
             }
             content = snapshot.content
             outputTokens = snapshot.usage.output.totalTokenCount
+        }
+
+        if let conversationId = turn.conversationId, let replyId = turn.replyId, !Task.isCancelled {
+            await OnDeviceSessionCache.shared.store(
+                session,
+                conversationId: conversationId,
+                coveredIds: history.map(\.id) + [last.id, replyId],
+                instructions: instructions
+            )
         }
 
         let durationMs = max(1, Int(Date().timeIntervalSince(start) * 1000))
@@ -217,6 +241,13 @@ public struct AppleOnDeviceBackend: ChatBackend {
             logger.debug("Trimmed \(history.count - kept.count) old messages to fit the on-device context")
         }
         return Transcript(entries: [instructionsEntry] + kept.reversed())
+    }
+
+    /// Whether a reused session still has room for the next prompt and the reply.
+    private static func fits(_ transcript: Transcript, promptText: String, reservedTokens: Int, model: SystemLanguageModel) async -> Bool {
+        let promptEntry = Transcript.Entry.prompt(Transcript.Prompt(segments: [.text(.init(content: promptText))]))
+        let used = await tokenCount(Array(transcript) + [promptEntry], model: model)
+        return used + reservedTokens <= model.contextSize
     }
 
     /// Exact count when the system can provide it (not in the Simulator); otherwise a
@@ -286,6 +317,35 @@ public struct AppleOnDeviceBackend: ChatBackend {
     }
 }
 
+// MARK: - Session cache
+
+/// The last on-device session per chat, with the messages its transcript covers. A session is
+/// handed out at most once (`take`), so a chat's turns never share one concurrently.
+actor OnDeviceSessionCache {
+    static let shared = OnDeviceSessionCache()
+
+    private struct Entry {
+        let session: LanguageModelSession
+        let coveredIds: [String]
+        let instructions: String
+    }
+
+    private var entries: [String: Entry] = [:]
+
+    /// The cached session if it covers exactly `historyIds` with the same instructions.
+    func take(conversationId: String, historyIds: [String], instructions: String) -> LanguageModelSession? {
+        guard let entry = entries.removeValue(forKey: conversationId),
+              entry.coveredIds == historyIds, entry.instructions == instructions else {
+            return nil
+        }
+        return entry.session
+    }
+
+    func store(_ session: LanguageModelSession, conversationId: String, coveredIds: [String], instructions: String) {
+        entries[conversationId] = Entry(session: session, coveredIds: coveredIds, instructions: instructions)
+    }
+}
+
 // MARK: - Prompt
 
 /// The message being answered: its text plus attachments in a form the model accepts.
@@ -309,6 +369,16 @@ private struct PromptParts {
                     throw OnDeviceError.unsupportedAttachment(attachment.filename)
                 }
                 images.append(image)
+                if let recognized = await ImageTextRecognizer.recognizeText(in: image) {
+                    text += """
+
+
+                        Text recognized in the attached image \(attachment.filename) (OCR, may contain errors):
+                        \"\"\"
+                        \(recognized)
+                        \"\"\"
+                        """
+                }
             } else if type.conforms(to: .text) || type.conforms(to: .json), let body = String(data: data, encoding: .utf8) {
                 text += "\n\nFile: \(attachment.filename)\n```\n\(body)\n```"
             } else if try await model.supportsDataAttachmentType(type) {

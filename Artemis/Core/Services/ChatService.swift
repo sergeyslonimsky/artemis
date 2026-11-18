@@ -218,9 +218,20 @@ public final class ChatService {
         }
         guard isCurrent(chatId: chatId, token: token) else { return }
 
-        if outcome.onDeviceError != nil, mayEscalate, decision.backend == .onDevice, !Task.isCancelled {
-            await escalate(chatId: chatId, token: token, failedMessageId: placeholder.id, route: route, preset: preset)
-            return
+        if mayEscalate, decision.backend == .onDevice, route.cloud != nil, !Task.isCancelled {
+            var escalationReason: RouteReason?
+            if outcome.onDeviceError != nil {
+                escalationReason = .onDeviceFailed
+            } else if outcome.status == .done, await RefusalDetector.isRefusal(outcome.content) {
+                escalationReason = .onDeviceDeclined
+            }
+            if let escalationReason, isCurrent(chatId: chatId, token: token), !Task.isCancelled {
+                await escalate(
+                    chatId: chatId, token: token, failedMessageId: placeholder.id,
+                    reason: escalationReason, route: route, preset: preset
+                )
+                return
+            }
         }
 
         if outcome.status == .done {
@@ -228,13 +239,20 @@ public final class ChatService {
         }
     }
 
-    /// The on-device model failed in Auto mode: retry in the cloud if the policy allows it.
-    private func escalate(chatId: String, token: UUID, failedMessageId: String, route: RouteRequest, preset: Preset?) async {
+    /// The on-device model failed or declined in Auto mode: retry in the cloud if the policy allows it.
+    private func escalate(
+        chatId: String,
+        token: UUID,
+        failedMessageId: String,
+        reason: RouteReason,
+        route: RouteRequest,
+        preset: Preset?
+    ) async {
         guard route.cloud != nil else { return }
         let settings = (try? database.fetchSettings()) ?? AppSettings()
         let chatAllowsCloud = (try? database.fetchChat(id: chatId))?.cloudAllowed ?? false
 
-        switch settings.cloudPolicy.apply(to: .cloud(.onDeviceFailed), mode: .auto, chatAllowsCloud: chatAllowsCloud) {
+        switch settings.cloudPolicy.apply(to: .cloud(reason), mode: .auto, chatAllowsCloud: chatAllowsCloud) {
         case .proceed(let decision):
             try? database.deleteMessagesFrom(chatId: chatId, messageId: failedMessageId)
             await reply(chatId: chatId, token: token, decision: decision, route: route, preset: preset, mayEscalate: false)
@@ -404,7 +422,9 @@ struct ReplyJob: Sendable {
             outcome.lastUserPrompt = history.last(where: { $0.role == .user })?.content ?? ""
 
             let settings = try database.fetchSettings()
-            let turn = ChatTurn(messages: history, systemPrompt: settings.systemPrompt, preset: preset)
+            var turn = ChatTurn(messages: history, systemPrompt: settings.systemPrompt, preset: preset)
+            turn.conversationId = chatId
+            turn.replyId = messageId
 
             for try await event in backend.stream(turn) {
                 try Task.checkCancellation()

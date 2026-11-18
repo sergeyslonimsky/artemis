@@ -90,7 +90,13 @@ public struct ChatView: View {
                 isBusy: isBusy,
                 currentPresetTitle: selectedPreset?.title,
                 onSend: sendCurrentMessage,
-                onStop: { chatService.cancel(chatId: chatId) }
+                onStop: { chatService.cancel(chatId: chatId) },
+                onFocus: {
+                    // Apple: prewarm when a request is likely at least a second away, e.g. typing starts.
+                    if effectiveMode != .cloud && isOnDeviceUsable {
+                        OnDeviceModel.prewarm()
+                    }
+                }
             )
         }
         .navigationBarTitleDisplayMode(.inline)
@@ -221,9 +227,6 @@ public struct ChatView: View {
     private func loadDefaults() {
         settings = (try? database.fetchSettings()) ?? AppSettings()
         onDeviceStatus = .current
-        if effectiveMode != .cloud {
-            OnDeviceModel.prewarm()
-        }
         guard let presetId = settings.defaultPresetId else { return }
         selectedPreset = try? database.fetchPresets().first { $0.id == presetId }
     }
@@ -274,9 +277,6 @@ public struct ChatView: View {
             } catch {
                 Self.logger.error("Failed to save routing mode: \(error.localizedDescription, privacy: .public)")
             }
-        }
-        if mode != .cloud {
-            OnDeviceModel.prewarm()
         }
     }
 
