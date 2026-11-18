@@ -21,7 +21,8 @@ public struct MessageBubbleView: View {
     /// Whether the chat has a cloud model to escalate to.
     public var cloudAvailable: Bool
 
-    @State private var copied: Bool = false
+    @State private var copied = false
+    @State private var showingTextSelection = false
 
     public init(
         message: Message,
@@ -58,51 +59,60 @@ public struct MessageBubbleView: View {
     }
 
     public var body: some View {
-        VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
+        Group {
             if message.role == .user {
-                userBubble
+                userMessage
             } else if message.status == .awaitingConsent {
                 consentCard
             } else {
-                assistantBubble
+                assistantMessage
             }
         }
-        .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
         .padding(.horizontal, 16)
-        .padding(.vertical, 4)
+        .sheet(isPresented: $showingTextSelection) {
+            TextSelectionSheet(text: message.content)
+        }
     }
 
-    // MARK: - User Bubble
-    private var userBubble: some View {
-        VStack(alignment: .trailing, spacing: 6) {
+    // MARK: - User
+
+    private var userMessage: some View {
+        VStack(alignment: .trailing, spacing: 8) {
             if !message.attachments.isEmpty {
-                ForEach(message.attachments) { att in
-                    AttachmentCardView(attachment: att)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(message.attachments) { attachment in
+                            AttachmentCardView(attachment: attachment)
+                        }
+                    }
                 }
+                .defaultScrollAnchor(.trailing)
+                .scrollBounceBehavior(.basedOnSize)
             }
 
             if !message.content.isEmpty {
-                Text(message.content)
-                    .font(.body)
-                    .foregroundStyle(.primary)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(Color(uiColor: .secondarySystemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                HStack {
+                    Spacer(minLength: 56)
+                    Text(message.content)
+                        .font(.body)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 11)
+                        .background(
+                            Color(uiColor: .secondarySystemBackground),
+                            in: RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        )
+                        .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 22, style: .continuous))
+                        .contextMenu { textActions }
+                }
             }
-
-            Text(message.createdAt, format: .dateTime.hour().minute())
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .padding(.trailing, 4)
         }
+        .frame(maxWidth: .infinity, alignment: .trailing)
     }
 
-    // MARK: - Assistant Bubble
-    private var assistantBubble: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Reasoning box
+    // MARK: - Assistant
+
+    private var assistantMessage: some View {
+        VStack(alignment: .leading, spacing: 10) {
             if !reasoning.isEmpty || (isStreaming && content.isEmpty) {
                 ReasoningView(
                     text: reasoning,
@@ -111,21 +121,24 @@ public struct MessageBubbleView: View {
                 )
             }
 
-            // Main Content
             if isStreaming && content.isEmpty && reasoning.isEmpty {
                 Text("Thinking…")
-                    .font(.body)
                     .foregroundStyle(.secondary)
                     .shimmer(active: true)
-                    .padding(.vertical, 4)
             } else if !content.isEmpty {
-                if isStreaming {
-                    StreamingMarkdownView(text: content)
-                } else {
-                    Markdown(content)
-                        .markdownTheme(.gitHub)
-                        .textSelection(.enabled)
+                Group {
+                    if isStreaming {
+                        StreamingMarkdownView(text: content)
+                    } else {
+                        Markdown(content)
+                            .markdownTheme(.artemis)
+                    }
                 }
+                .padding(8)
+                .background(Color(uiColor: .systemBackground))
+                .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .contextMenu { if !isStreaming { textActions } }
+                .padding(-8)
             }
 
             if message.status == .failed {
@@ -138,128 +151,173 @@ public struct MessageBubbleView: View {
                         + (cloudAvailable ? "" : " Choose a cloud model to use it."),
                     systemImage: "info.circle"
                 )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            if let backend = message.backend {
-                BackendBadge(kind: backend, providerName: providerName, model: message.model, reason: message.routeReason)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
             }
 
             if !isStreaming {
-                footer
+                actionBar
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var textActions: some View {
+        Button {
+            copy()
+        } label: {
+            Label("Copy", systemImage: "doc.on.doc")
+        }
+        Button {
+            showingTextSelection = true
+        } label: {
+            Label("Select Text", systemImage: "selection.pin.in.out")
+        }
+        if let onRegenerate, message.role == .assistant {
+            Button(action: onRegenerate) {
+                Label("Regenerate", systemImage: "arrow.clockwise")
+            }
+        }
+    }
+
+    private var actionBar: some View {
+        HStack(spacing: 2) {
+            if !message.content.isEmpty {
+                ActionIcon(systemName: copied ? "checkmark" : "doc.on.doc", label: "Copy", action: copy)
+            }
+            if let onRegenerate {
+                ActionIcon(
+                    systemName: "arrow.clockwise",
+                    label: message.status == .failed ? "Retry" : "Regenerate",
+                    action: onRegenerate
+                )
+            }
+            if let onAskCloud {
+                ActionIcon(systemName: "cloud", label: "Ask cloud", action: onAskCloud)
+            }
+
+            Spacer(minLength: 8)
+
+            if message.status == .cancelled {
+                Text("Stopped")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            if let backend = message.backend {
+                BackendBadge(
+                    kind: backend,
+                    providerName: providerName,
+                    model: message.model,
+                    reason: message.routeReason,
+                    stats: message.stats
+                )
+            }
+        }
+        .padding(.leading, -8)
+    }
+
+    private func copy() {
+        UIPasteboard.general.string = message.content
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        withAnimation { copied = true }
+        Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            withAnimation { copied = false }
+        }
     }
 
     // MARK: - Consent
 
     private var consentCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             Label("Send to the cloud?", systemImage: "cloud")
-                .font(.subheadline.weight(.semibold))
+                .font(.headline)
 
-            Text("This request is better handled by \(cloudLabel) because \(message.routeReason?.explanation ?? "it needs a more capable model"). The conversation will be sent to that provider, and this chat won't ask again.")
-                .font(.callout)
+            Text("This is better handled by \(cloudLabel) because \(message.routeReason?.explanation ?? "it needs a more capable model"). The conversation will be sent to that provider, and this chat won't ask again.")
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
 
-            HStack(spacing: 8) {
-                Button("Send") { onConsent?(.allow) }
-                    .buttonStyle(.borderedProminent)
-                Button("Answer on-device") { onConsent?(.answerOnDevice) }
-                    .buttonStyle(.bordered)
-            }
-            .controlSize(.small)
+            HStack(spacing: 10) {
+                Button {
+                    onConsent?(.allow)
+                } label: {
+                    Text("Send")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
 
+                Button {
+                    onConsent?(.answerOnDevice)
+                } label: {
+                    Text("Keep on-device")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
+            .buttonBorderShape(.capsule)
+            .controlSize(.regular)
         }
-        .padding(12)
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.accentColor.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     private var errorBanner: some View {
-        HStack(alignment: .top, spacing: 8) {
+        Label {
+            Text(message.error ?? "Something went wrong.")
+                .font(.subheadline)
+        } icon: {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
-            Text(message.error ?? "Something went wrong.")
-                .font(.callout)
-                .foregroundStyle(.primary)
-                .textSelection(.enabled)
-            Spacer(minLength: 0)
         }
-        .padding(10)
-        .background(Color.orange.opacity(0.12))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
+}
 
-    private var footer: some View {
-        HStack(spacing: 12) {
-            Text(message.createdAt, format: .dateTime.hour().minute())
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+/// A borderless icon button for the assistant action bar.
+private struct ActionIcon: View {
+    let systemName: String
+    let label: String
+    let action: () -> Void
 
-            if message.status == .cancelled {
-                Text("Stopped")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+}
+
+/// Full message text in a sheet where any part can be selected, like ChatGPT's "Select Text".
+private struct TextSelectionSheet: View {
+    let text: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                Text(text)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
             }
-
-            if let stats = message.stats {
-                HStack(spacing: 4) {
-                    if stats.isEstimated {
-                        Text("≈")
-                    }
-                    Text("\(stats.tokens) tokens")
-
-                    if let rate = stats.tokensPerSecond {
-                        Text("·")
-                        Text(String(format: "%.1f t/s", rate))
-                    }
+            .navigationTitle("Select Text")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
                 }
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-            }
-
-            Spacer()
-
-            if !message.content.isEmpty {
-                Button {
-                    UIPasteboard.general.string = message.content
-                    withAnimation { copied = true }
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                        withAnimation { copied = false }
-                    }
-                } label: {
-                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                        .font(.caption2)
-                        .foregroundStyle(copied ? .green : .secondary)
-                }
-                .buttonStyle(.plain)
-            }
-
-            if let onAskCloud {
-                Button(action: onAskCloud) {
-                    Label("Ask cloud", systemImage: "cloud")
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-
-            if let onRegenerate = onRegenerate {
-                Button(action: onRegenerate) {
-                    Label(message.status == .failed ? "Retry" : "Regenerate", systemImage: "arrow.clockwise")
-                        .labelStyle(.iconOnly)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
             }
         }
-        .padding(.top, 4)
+        .presentationDetents([.medium, .large])
     }
 }
 
@@ -271,42 +329,68 @@ struct BackendBadge: View {
     let providerName: String?
     let model: String?
     var reason: RouteReason?
+    var stats: MessageStats?
 
-    @State private var showingReason = false
+    @State private var showingDetails = false
 
     var body: some View {
         Button {
-            showingReason = true
+            showingDetails = true
         } label: {
             label
         }
         .buttonStyle(.plain)
-        .disabled(reason == nil)
-        .popover(isPresented: $showingReason) {
-            Text(reasonText)
-                .font(.callout)
-                .padding()
-                .presentationCompactAdaptation(.popover)
+        .popover(isPresented: $showingDetails) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                if let reasonText {
+                    Text(reasonText)
+                        .font(.subheadline)
+                }
+                if let statsText {
+                    Text(statsText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding()
+            .frame(maxWidth: 280, alignment: .leading)
+            .presentationCompactAdaptation(.popover)
         }
     }
 
-    private var reasonText: String {
-        guard let reason else { return "" }
+    private var reasonText: String? {
+        guard let reason else { return nil }
         let prefix = kind == .onDevice ? "Answered on-device" : "Sent to the cloud"
         return "\(prefix): \(reason.explanation)."
     }
 
+    private var statsText: String? {
+        guard let stats else { return nil }
+        var text = "\(stats.isEstimated ? "≈" : "")\(stats.tokens) tokens"
+        if let rate = stats.tokensPerSecond {
+            text += " · " + String(format: "%.1f tokens/s", rate)
+        }
+        return text
+    }
+
     private var label: some View {
-        Label(title, systemImage: kind == .onDevice ? "iphone" : "cloud")
-            .font(.caption2.weight(.medium))
+        Label(shortTitle, systemImage: kind == .onDevice ? "iphone" : "cloud")
+            .font(.caption.weight(.medium))
             .lineLimit(1)
             .truncationMode(.middle)
             .foregroundStyle(.secondary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(Color.secondary.opacity(0.12))
-            .clipShape(Capsule())
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Color.secondary.opacity(0.1), in: Capsule())
             .accessibilityLabel(kind == .onDevice ? "Answered on device" : "Answered by \(title)")
+    }
+
+    /// Model name without the vendor prefix (`openai/gpt-4o` → `gpt-4o`).
+    private var shortTitle: String {
+        guard kind == .cloud, let model else { return title }
+        return model.split(separator: "/").last.map(String.init) ?? model
     }
 
     private var title: String {
@@ -362,6 +446,15 @@ private struct MarkdownChunk: View, Equatable {
 
     var body: some View {
         Markdown(text)
-            .markdownTheme(.gitHub)
+            .markdownTheme(.artemis)
+    }
+}
+
+extension Theme {
+    /// GitHub styling for blocks, but body text on the system background at the system size
+    /// (the GitHub theme paints its own background, which shows as a box in dark mode).
+    @MainActor static let artemis = Theme.gitHub.text {
+        ForegroundColor(.primary)
+        FontSize(17)
     }
 }

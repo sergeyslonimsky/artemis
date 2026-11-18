@@ -13,6 +13,7 @@
 		0CD6E964E585AEB1BB2135C5 /* Preset.swift in Sources */ = {isa = PBXBuildFile; fileRef = 870E303516B4ED05DE6C4602 /* Preset.swift */; };
 		0DAF0F8746C85F5F2FC10227 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A5CF4E3FDFADAD670455AB0 /* AppSettings.swift */; };
 		1401EA669C75B52B998791BF /* MessageBubbleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1692584D159B2FB5654D57F5 /* MessageBubbleView.swift */; };
+		258CFDE65F04BF6049B81DC1 /* DrawerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 839F18A569C6FC0C3A3965D7 /* DrawerView.swift */; };
 		260F02F64CE2F6F62BD5CF8B /* AppleOnDeviceBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA6D295FEE0D177E80B95F4A /* AppleOnDeviceBackend.swift */; };
 		29B5E91BC0878B89DB551881 /* ReasoningView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEAC8FC86440661B1411ECCF /* ReasoningView.swift */; };
 		307E620F219986FB7E0F6053 /* ChatBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B82F1C86476A6DE982D0896 /* ChatBackend.swift */; };
@@ -27,7 +28,6 @@
 		74426400F1962183E0163D90 /* ArtemisApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86D7D556A6AD6FA356D284B1 /* ArtemisApp.swift */; };
 		8026D509DE3C82F33D707527 /* ShimmerModifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2DD9FC347DC05D0156997A9 /* ShimmerModifier.swift */; };
 		8D372E62D8F5C6E9E16C9A54 /* LLMClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4ED8EE9616E76B9EFE32E06 /* LLMClient.swift */; };
-		966A863B7796E5DBB491D618 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 231AF1CB37CD8E15D8313A00 /* SidebarView.swift */; };
 		98772A65D040F57DA39553F1 /* APIKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFA3555199FA3736282E4138 /* APIKeyStore.swift */; };
 		9B83A3B819911C10FF6C8D64 /* Chat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7209AFE468C9DF36112B8200 /* Chat.swift */; };
 		A1029DA96183A8347CD6D4B5 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = AAEF9BB9619076431123BA40 /* GRDB */; };
@@ -53,7 +53,6 @@
 		1622960A58A52115F2777581 /* OnDeviceModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnDeviceModel.swift; sourceTree = "<group>"; };
 		1692584D159B2FB5654D57F5 /* MessageBubbleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageBubbleView.swift; sourceTree = "<group>"; };
 		1C523D25FB8AE545981B22B3 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
-		231AF1CB37CD8E15D8313A00 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
 		2EB6D5E0BEBFA0BF8EE02D60 /* StreamBatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamBatcher.swift; sourceTree = "<group>"; };
 		34FD4F9B238BE5767E3E1271 /* AttachmentProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentProcessor.swift; sourceTree = "<group>"; };
 		363F9435EA71FEAB2A5B134A /* AppDatabase+Queries.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppDatabase+Queries.swift"; sourceTree = "<group>"; };
@@ -66,6 +65,7 @@
 		7209AFE468C9DF36112B8200 /* Chat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Chat.swift; sourceTree = "<group>"; };
 		74161ED0BDD04CEE49A5517A /* AppDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDatabase.swift; sourceTree = "<group>"; };
 		7A5CF4E3FDFADAD670455AB0 /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
+		839F18A569C6FC0C3A3965D7 /* DrawerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawerView.swift; sourceTree = "<group>"; };
 		86D7D556A6AD6FA356D284B1 /* ArtemisApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtemisApp.swift; sourceTree = "<group>"; };
 		870E303516B4ED05DE6C4602 /* Preset.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preset.swift; sourceTree = "<group>"; };
 		9E1284083726AE67A2541149 /* Routing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Routing.swift; sourceTree = "<group>"; };
@@ -150,7 +150,7 @@
 		1CDC7840CA178855E063D234 /* Sidebar */ = {
 			isa = PBXGroup;
 			children = (
-				231AF1CB37CD8E15D8313A00 /* SidebarView.swift */,
+				839F18A569C6FC0C3A3965D7 /* DrawerView.swift */,
 			);
 			path = Sidebar;
 			sourceTree = "<group>";
@@ -362,6 +362,7 @@
 				4A647AEBB5392F10D6D75E51 /* ChatView.swift in Sources */,
 				04E6BBE757E0A35976D37AD0 /* ComposerView.swift in Sources */,
 				D813B451C68A76EC20A6CFB8 /* ContentView.swift in Sources */,
+				258CFDE65F04BF6049B81DC1 /* DrawerView.swift in Sources */,
 				8D372E62D8F5C6E9E16C9A54 /* LLMClient.swift in Sources */,
 				3E7DA3164D02771E8DF8CEB4 /* LLMEvent.swift in Sources */,
 				320C4836C20BD1CFBAE0D6B7 /* LLMRequest.swift in Sources */,
@@ -378,7 +379,6 @@
 				FEF944718B5A9A7707AC0A1A /* SearchHit.swift in Sources */,
 				A87B7F75E9B3AA5A82539CF9 /* SettingsView.swift in Sources */,
 				8026D509DE3C82F33D707527 /* ShimmerModifier.swift in Sources */,
-				966A863B7796E5DBB491D618 /* SidebarView.swift in Sources */,
 				F72B865CEAE92839F075A05C /* StreamBatcher.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

@@ -1,61 +1,106 @@
 import SwiftUI
 
+/// An attachment in the composer (`compact`) or in a sent message.
 public struct AttachmentCardView: View {
     public let attachment: Attachment
+    public var compact: Bool
     public var onRemove: (() -> Void)?
 
-    public init(attachment: Attachment, onRemove: (() -> Void)? = nil) {
+    @State private var thumbnail: UIImage?
+    @Environment(\.displayScale) private var displayScale
+
+    public init(attachment: Attachment, compact: Bool = false, onRemove: (() -> Void)? = nil) {
         self.attachment = attachment
+        self.compact = compact
         self.onRemove = onRemove
     }
 
     public var body: some View {
-        HStack(spacing: 8) {
-            if attachment.kind == .image, let data = attachment.data, let uiImage = UIImage(data: data) {
-                Image(uiImage: uiImage)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 32, height: 32)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+        Group {
+            if attachment.kind == .image {
+                imageTile
             } else {
-                Image(systemName: attachment.kind == .image ? "photo" : "doc.text")
-                    .font(.system(size: 16))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 32, height: 32)
-                    .background(Color.secondary.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                documentCard
             }
+        }
+        .overlay(alignment: .topTrailing) {
+            if let onRemove {
+                Button(action: onRemove) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 20, height: 20)
+                        .background(Color.black.opacity(0.7), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .offset(x: 6, y: -6)
+                .accessibilityLabel("Remove \(attachment.filename)")
+            }
+        }
+        .padding(.top, onRemove == nil ? 0 : 6)
+        .padding(.trailing, onRemove == nil ? 0 : 6)
+        .task(id: attachment.id) { await loadThumbnail() }
+    }
+
+    private var imageSide: CGFloat { compact ? 60 : 180 }
+
+    private var imageTile: some View {
+        RoundedRectangle(cornerRadius: compact ? 12 : 18, style: .continuous)
+            .fill(Color(uiColor: .tertiarySystemFill))
+            .frame(width: imageSide, height: imageSide)
+            .overlay {
+                if let thumbnail {
+                    Image(uiImage: thumbnail)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Image(systemName: "photo")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: compact ? 12 : 18, style: .continuous))
+            .overlay(
+                // Keeps light images from dissolving into the background.
+                RoundedRectangle(cornerRadius: compact ? 12 : 18, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.1))
+            )
+            .accessibilityLabel(attachment.filename)
+    }
+
+    private var documentCard: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "doc.text.fill")
+                .font(.system(size: 16))
+                .foregroundStyle(.white)
+                .frame(width: 34, height: 34)
+                .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(attachment.filename)
-                    .font(.caption.weight(.medium))
+                    .font(.subheadline.weight(.medium))
                     .lineLimit(1)
                     .truncationMode(.middle)
-
-                Text(formattedSize(attachment.size))
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-
-            if let onRemove = onRemove {
-                Button(action: onRemove) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .padding(.leading, 4)
+                Text(attachment.size.formatted(.byteCount(style: .file)))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(Color(uiColor: .secondarySystemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .padding(.leading, 8)
+        .padding(.trailing, 14)
+        .padding(.vertical, 8)
+        .frame(maxWidth: 240, alignment: .leading)
+        .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
-    private func formattedSize(_ bytes: Int) -> String {
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .file
-        return formatter.string(fromByteCount: Int64(bytes))
+    /// Composer attachments carry their bytes; sent ones are read back from disk.
+    private func loadThumbnail() async {
+        guard attachment.kind == .image, thumbnail == nil else { return }
+        let data = attachment.data
+        let url = AppDatabase.shared.attachmentURL(id: attachment.id)
+        let side = imageSide * displayScale
+        thumbnail = await Task.detached(priority: .utility) {
+            let image = data.flatMap(UIImage.init(data:)) ?? UIImage(contentsOfFile: url.path)
+            return await image?.byPreparingThumbnail(ofSize: CGSize(width: side, height: side))
+        }.value
     }
 }

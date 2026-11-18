@@ -31,13 +31,27 @@ extension AppDatabase {
             .values(in: dbWriter)
     }
 
+    /// - Parameter id: lets a draft chat keep the id the UI already uses for it.
     @discardableResult
     public func createChat(
+        id: String = UUID().uuidString.lowercased(),
         title: String,
         source: TitleSource = .placeholder,
+        routingMode: RoutingMode? = nil,
+        providerId: String? = nil,
+        model: String? = nil,
         now: Date = Date()
     ) throws -> Chat {
-        let chat = Chat(title: title, titleSource: source, createdAt: now, updatedAt: now)
+        let chat = Chat(
+            id: id,
+            title: title,
+            titleSource: source,
+            createdAt: now,
+            updatedAt: now,
+            providerId: providerId,
+            model: model,
+            routingMode: routingMode
+        )
         try dbWriter.write { db in
             try chat.insert(db)
         }

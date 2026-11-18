@@ -6,11 +6,9 @@ public struct ComposerView: View {
     @Binding public var text: String
     @Binding public var attachments: [Attachment]
     public let isBusy: Bool
-    public let currentModel: String
     public let currentPresetTitle: String?
     public let onSend: () -> Void
     public let onStop: () -> Void
-    public var onSelectModel: (() -> Void)?
 
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
     @State private var isShowingFileImporter: Bool = false
@@ -21,148 +19,74 @@ public struct ComposerView: View {
         text: Binding<String>,
         attachments: Binding<[Attachment]>,
         isBusy: Bool,
-        currentModel: String,
         currentPresetTitle: String? = nil,
         onSend: @escaping () -> Void,
-        onStop: @escaping () -> Void,
-        onSelectModel: (() -> Void)? = nil
+        onStop: @escaping () -> Void
     ) {
         self._text = text
         self._attachments = attachments
         self.isBusy = isBusy
-        self.currentModel = currentModel
         self.currentPresetTitle = currentPresetTitle
         self.onSend = onSend
         self.onStop = onStop
-        self.onSelectModel = onSelectModel
+    }
+
+    private var canSend: Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty
     }
 
     public var body: some View {
-        VStack(spacing: 8) {
-            // Model and Preset Info Strip
-            HStack(spacing: 6) {
-                Button {
-                    onSelectModel?()
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "cpu")
-                            .font(.caption2)
-                        Text(currentModel.isEmpty ? "Select model" : currentModel)
-                            .font(.caption2.weight(.medium))
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 8))
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.secondary.opacity(0.12))
-                    .clipShape(Capsule())
-                    .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-
-                if let preset = currentPresetTitle, !preset.isEmpty {
-                    HStack(spacing: 4) {
-                        Image(systemName: "slider.horizontal.3")
-                            .font(.caption2)
-                        Text(preset)
-                            .font(.caption2.weight(.medium))
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.secondary.opacity(0.12))
-                    .clipShape(Capsule())
-                    .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-            }
-            .padding(.horizontal, 4)
-
-            // Staged Attachments
+        VStack(alignment: .leading, spacing: 10) {
             if !attachments.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(attachments) { att in
-                            AttachmentCardView(attachment: att) {
-                                if let idx = attachments.firstIndex(where: { $0.id == att.id }) {
-                                    attachments.remove(at: idx)
-                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                }
+                            AttachmentCardView(attachment: att, compact: true) {
+                                attachments.removeAll { $0.id == att.id }
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
                             }
                         }
                     }
-                    .padding(.horizontal, 4)
                 }
             }
 
-            // Input Dock
-            HStack(alignment: .bottom, spacing: 10) {
-                // Attach menu (Photos / Files)
-                Menu {
-                    // A PhotosPicker nested in a Menu never presents; drive it from state instead.
-                    Button {
-                        isShowingPhotoPicker = true
-                    } label: {
-                        Label("Photo Library", systemImage: "photo.on.rectangle")
-                    }
+            TextField("Ask anything", text: $text, axis: .vertical)
+                .lineLimit(1...8)
+                .focused($isFocused)
+                .padding(.horizontal, 4)
 
-                    Button {
-                        isShowingFileImporter = true
-                    } label: {
-                        Label("Files & Documents", systemImage: "doc")
-                    }
-                } label: {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 26))
+            HStack(spacing: 8) {
+                attachMenu
+
+                if let preset = currentPresetTitle, !preset.isEmpty {
+                    Label(preset, systemImage: "slider.horizontal.3")
+                        .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.secondary.opacity(0.12), in: Capsule())
                 }
-                .buttonStyle(.plain)
-                .padding(.bottom, 4)
 
-                // Text Field
-                TextField("Ask anything…", text: $text, axis: .vertical)
-                    .lineLimit(1...6)
-                    .focused($isFocused)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color(uiColor: .secondarySystemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                Spacer()
 
-                // Send / Stop button
-                if isBusy {
-                    Button {
-                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                        onStop()
-                    } label: {
-                        Image(systemName: "stop.circle.fill")
-                            .font(.system(size: 32))
-                            .foregroundStyle(.red)
-                    }
-                    .buttonStyle(.plain)
-                } else {
-                    Button {
-                        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !trimmed.isEmpty || !attachments.isEmpty else { return }
-                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                        onSend()
-                    } label: {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.system(size: 32))
-                            .foregroundStyle((text.isEmpty && attachments.isEmpty) ? Color.secondary.opacity(0.3) : Color.accentColor)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(text.isEmpty && attachments.isEmpty)
-                }
+                sendButton
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 10)
-        .padding(.bottom, 12)
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .shadow(color: Color.black.opacity(0.08), radius: 10, y: -2)
         .padding(.horizontal, 12)
-        .padding(.bottom, 6)
+        .padding(.top, 12)
+        .padding(.bottom, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .fill(Color(uiColor: .secondarySystemBackground))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.06))
+        )
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
+        .contentShape(Rectangle())
+        .onTapGesture { isFocused = true }
         .fileImporter(
             isPresented: $isShowingFileImporter,
             allowedContentTypes: [.pdf, .text, .image, .data],
@@ -178,6 +102,63 @@ public struct ComposerView: View {
         )
         .onChange(of: selectedPhotoItems) { _, items in
             handlePhotoSelection(items)
+        }
+    }
+
+    private var attachMenu: some View {
+        Menu {
+            // A PhotosPicker nested in a Menu never presents; drive it from state instead.
+            Button {
+                isShowingPhotoPicker = true
+            } label: {
+                Label("Photos", systemImage: "photo.on.rectangle")
+            }
+            Button {
+                isShowingFileImporter = true
+            } label: {
+                Label("Files", systemImage: "doc")
+            }
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(.primary)
+                .frame(width: 34, height: 34)
+                .overlay(Circle().strokeBorder(Color.primary.opacity(0.15)))
+        }
+        .tint(.primary)
+        .accessibilityLabel("Attach")
+    }
+
+    @ViewBuilder
+    private var sendButton: some View {
+        if isBusy {
+            Button {
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                onStop()
+            } label: {
+                Image(systemName: "stop.fill")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Color(uiColor: .systemBackground))
+                    .frame(width: 34, height: 34)
+                    .background(Color.primary, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Stop")
+        } else {
+            Button {
+                guard canSend else { return }
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                onSend()
+            } label: {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(Color(uiColor: .systemBackground))
+                    .frame(width: 34, height: 34)
+                    .background(canSend ? Color.primary : Color.secondary.opacity(0.35), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canSend)
+            .accessibilityLabel("Send")
         }
     }
 

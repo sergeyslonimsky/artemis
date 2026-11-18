@@ -2,9 +2,15 @@ import SwiftUI
 import os
 
 public struct ChatView: View {
+    /// May not exist in the database yet: a draft is stored when its first message is sent.
     public let chatId: String
+    public var onOpenDrawer: () -> Void
+    public var onNewChat: () -> Void
 
     @State private var chat: Chat?
+    @State private var chatLoaded = false
+    /// Mode picked before a draft chat exists.
+    @State private var draftMode: RoutingMode?
     @State private var messages: [Message] = []
     @State private var providers: [Provider] = []
     @State private var inputText: String = ""
@@ -22,8 +28,10 @@ public struct ChatView: View {
     private let database = AppDatabase.shared
     private static let logger = Logger(subsystem: "com.artemis.ios", category: "ChatView")
 
-    public init(chatId: String) {
+    public init(chatId: String, onOpenDrawer: @escaping () -> Void = {}, onNewChat: @escaping () -> Void = {}) {
         self.chatId = chatId
+        self.onOpenDrawer = onOpenDrawer
+        self.onNewChat = onNewChat
     }
 
     private var selectedProvider: Provider? {
@@ -38,7 +46,7 @@ public struct ChatView: View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 12) {
+                    LazyVStack(spacing: 20) {
                         ForEach(messages) { msg in
                             bubble(for: msg)
                         }
@@ -56,7 +64,12 @@ public struct ChatView: View {
                             .frame(height: 1)
                             .id("scroll_bottom")
                     }
-                    .padding(.vertical, 12)
+                    .padding(.vertical, 16)
+                }
+                .overlay {
+                    if messages.isEmpty && !isBusy {
+                        emptyState
+                    }
                 }
                 .defaultScrollAnchor(.bottom)
                 .scrollDismissesKeyboard(.interactively)
@@ -75,30 +88,48 @@ public struct ChatView: View {
                 text: $inputText,
                 attachments: $attachments,
                 isBusy: isBusy,
-                currentModel: routeLabel,
                 currentPresetTitle: selectedPreset?.title,
                 onSend: sendCurrentMessage,
-                onStop: { chatService.cancel(chatId: chatId) },
-                onSelectModel: { showingModelPicker = true }
+                onStop: { chatService.cancel(chatId: chatId) }
             )
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button(action: onOpenDrawer) {
+                    Image(systemName: "line.3.horizontal")
+                }
+                .accessibilityLabel("Chats")
+            }
             ToolbarItem(placement: .principal) {
-                VStack(spacing: 2) {
-                    Text(chat?.title ?? "Chat")
-                        .font(.headline)
-                        .lineLimit(1)
-                    if !routeLabel.isEmpty {
-                        Text(routeLabel)
-                            .font(.caption2)
+                Button {
+                    showingModelPicker = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(routeTitle)
+                            .font(.headline)
+                            .lineLimit(1)
+                        Image(systemName: "chevron.down")
+                            .font(.caption.weight(.bold))
                             .foregroundStyle(.secondary)
                     }
+                    .foregroundStyle(.primary)
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Model: \(routeLabel)")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button(action: onNewChat) {
+                    Image(systemName: "square.and.pencil")
+                }
+                .disabled(messages.isEmpty)
+                .accessibilityLabel("New chat")
             }
         }
         .sheet(isPresented: $showingModelPicker) {
             modelPickerSheet
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         }
         .alert(
             "Couldn't send message",
@@ -114,6 +145,27 @@ public struct ChatView: View {
         .task { loadDefaults() }
         .onChange(of: showingModelPicker) { _, showing in
             if showing { onDeviceStatus = .current }
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 10) {
+            Text("What can I help with?")
+                .font(.title2.weight(.semibold))
+            Label(emptyStateHint, systemImage: effectiveMode == .cloud ? "cloud" : "lock.iphone")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, 32)
+        .allowsHitTesting(false)
+    }
+
+    private var emptyStateHint: String {
+        switch effectiveMode {
+        case .onDevice: "Answered privately on this iPhone"
+        case .cloud: "Answered by \(selectedModel.isEmpty ? "your cloud model" : selectedModel)"
+        case .auto: "On-device first, cloud only when needed"
         }
     }
 
@@ -137,6 +189,7 @@ public struct ChatView: View {
         do {
             for try await value in database.observeChat(id: chatId) {
                 chat = value
+                chatLoaded = true
                 resolveSelection()
             }
         } catch {
@@ -178,7 +231,7 @@ public struct ChatView: View {
     /// Picks the chat's saved cloud model, falling back to the default provider. Keeps a valid current choice.
     private func resolveSelection() {
         // Wait for the chat so its saved model wins over the defaults.
-        guard chat != nil else { return }
+        guard chatLoaded else { return }
         if let current = selectedProvider, current.models.isEmpty || current.models.contains(selectedModel) {
             return
         }
@@ -203,6 +256,7 @@ public struct ChatView: View {
     private func selectModel(_ model: String, of provider: Provider) {
         selectedProviderId = provider.id
         selectedModel = model
+        guard chat != nil else { return } // a draft saves its selection when it's created
         do {
             try database.setChatModel(chatId: chatId, providerId: provider.id, model: model)
         } catch {
@@ -211,11 +265,15 @@ public struct ChatView: View {
     }
 
     private func setRoutingMode(_ mode: RoutingMode) {
-        chat?.routingMode = mode
-        do {
-            try database.setChatRoutingMode(chatId: chatId, mode: mode)
-        } catch {
-            Self.logger.error("Failed to save routing mode: \(error.localizedDescription, privacy: .public)")
+        if chat == nil {
+            draftMode = mode
+        } else {
+            chat?.routingMode = mode
+            do {
+                try database.setChatRoutingMode(chatId: chatId, mode: mode)
+            } catch {
+                Self.logger.error("Failed to save routing mode: \(error.localizedDescription, privacy: .public)")
+            }
         }
         if mode != .cloud {
             OnDeviceModel.prewarm()
@@ -225,7 +283,7 @@ public struct ChatView: View {
     // MARK: - Routing
 
     private var effectiveMode: RoutingMode {
-        chat?.routingMode ?? settings.routingMode
+        chat?.routingMode ?? draftMode ?? settings.routingMode
     }
 
     private var cloudTarget: CloudTarget? {
@@ -250,6 +308,15 @@ public struct ChatView: View {
         }
     }
 
+    /// Compact title for the navigation bar.
+    private var routeTitle: String {
+        switch effectiveMode {
+        case .onDevice: "On-device"
+        case .auto: "Auto"
+        case .cloud: selectedModel.split(separator: "/").last.map(String.init) ?? "Cloud"
+        }
+    }
+
     private var routeLabel: String {
         switch effectiveMode {
         case .onDevice:
@@ -271,6 +338,15 @@ public struct ChatView: View {
 
         let prompt = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         perform {
+            if chat == nil {
+                chat = try database.createChat(
+                    id: chatId,
+                    title: "New Chat",
+                    routingMode: draftMode,
+                    providerId: selectedProviderId,
+                    model: selectedModel.isEmpty ? nil : selectedModel
+                )
+            }
             try chatService.send(
                 chatId: chatId,
                 content: prompt,

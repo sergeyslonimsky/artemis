@@ -1,48 +1,71 @@
 import SwiftUI
 
+/// Root: the current chat with a history drawer that slides in from the left.
 struct ContentView: View {
-    @State private var navigationPath = [String]()
-    @State private var selectedChatId: String?
-    @State private var showingSettings: Bool = false
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    /// A fresh id is a draft: the chat is only stored once its first message is sent.
+    @State private var chatId = ContentView.newChatId()
+    @State private var isDrawerOpen = false
+    @State private var showingSettings = false
+    @GestureState private var dragTranslation: CGFloat = 0
 
-    private let database = AppDatabase.shared
+    private static func newChatId() -> String {
+        UUID().uuidString.lowercased()
+    }
 
     var body: some View {
-        Group {
-            if horizontalSizeClass == .regular {
-                // iPad / Mac: Split View
-                NavigationSplitView {
-                    SidebarView(
-                        selectedChatId: $selectedChatId,
-                        onOpenSettings: { showingSettings = true },
-                        onSelectChat: { id in
-                            selectedChatId = id
-                        }
+        GeometryReader { geometry in
+            let drawerWidth = min(geometry.size.width * 0.82, 340)
+            let progress = drawerProgress(width: drawerWidth)
+
+            ZStack(alignment: .leading) {
+                NavigationStack {
+                    ChatView(
+                        chatId: chatId,
+                        onOpenDrawer: { setDrawer(open: true) },
+                        onNewChat: startNewChat
                     )
-                } detail: {
-                    if let chatId = selectedChatId {
-                        ChatView(chatId: chatId)
-                            .id(chatId)
-                    } else {
-                        emptyStateView
-                    }
+                    .id(chatId)
                 }
-            } else {
-                // iPhone: NavigationStack
-                NavigationStack(path: $navigationPath) {
-                    SidebarView(
-                        selectedChatId: $selectedChatId,
-                        onOpenSettings: { showingSettings = true },
-                        onSelectChat: { id in
-                            navigationPath.append(id)
-                        }
-                    )
-                    .navigationDestination(for: String.self) { chatId in
-                        ChatView(chatId: chatId)
-                            .id(chatId)
-                    }
+                .overlay {
+                    Color.black
+                        .opacity(0.25 * progress)
+                        .ignoresSafeArea()
+                        .allowsHitTesting(isDrawerOpen)
+                        .onTapGesture { setDrawer(open: false) }
                 }
+                .overlay(alignment: .leading) {
+                    // Edge strip to swipe the drawer open without fighting the chat's scrolling.
+                    Color.clear
+                        .frame(width: 24)
+                        .contentShape(Rectangle())
+                        .gesture(dragGesture(width: drawerWidth))
+                        .allowsHitTesting(!isDrawerOpen)
+                }
+                .offset(x: progress * drawerWidth)
+
+                DrawerView(
+                    selectedChatId: chatId,
+                    onSelectChat: { id in
+                        chatId = id
+                        setDrawer(open: false)
+                    },
+                    onNewChat: startNewChat,
+                    onDeleteChat: { id in
+                        if id == chatId { chatId = Self.newChatId() }
+                    },
+                    onOpenSettings: { showingSettings = true }
+                )
+                .frame(width: drawerWidth)
+                .overlay(alignment: .trailing) {
+                    // The scrim is invisible on black in dark mode; the edge keeps the drawer distinct.
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.12))
+                        .frame(width: 0.5)
+                        .ignoresSafeArea()
+                }
+                .shadow(color: .black.opacity(0.15 * progress), radius: 12, x: 4)
+                .offset(x: (progress - 1) * drawerWidth)
+                .gesture(dragGesture(width: drawerWidth))
             }
         }
         .sheet(isPresented: $showingSettings) {
@@ -50,34 +73,35 @@ struct ContentView: View {
         }
     }
 
-    private var emptyStateView: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 56))
-                .foregroundStyle(.tint)
+    private func drawerProgress(width: CGFloat) -> CGFloat {
+        let base: CGFloat = isDrawerOpen ? 1 : 0
+        return min(max(base + dragTranslation / width, 0), 1)
+    }
 
-            Text("Artemis")
-                .font(.largeTitle.bold())
-
-            Text("Fast, elegant AI chat client")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-
-            Button {
-                if let newChat = try? database.createChat(title: "New Chat") {
-                    selectedChatId = newChat.id
-                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                }
-            } label: {
-                Label("Start a conversation", systemImage: "plus")
-                    .font(.body.weight(.medium))
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
+    private func dragGesture(width: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 10)
+            .updating($dragTranslation) { value, state, _ in
+                state = value.translation.width
             }
-            .buttonStyle(.borderedProminent)
-            .padding(.top, 8)
+            .onEnded { value in
+                let predicted = (isDrawerOpen ? width : 0) + value.predictedEndTranslation.width
+                setDrawer(open: predicted > width / 2)
+            }
+    }
+
+    private func setDrawer(open: Bool) {
+        if open {
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         }
-        .padding()
+        withAnimation(.snappy(duration: 0.3)) {
+            isDrawerOpen = open
+        }
+    }
+
+    private func startNewChat() {
+        chatId = Self.newChatId()
+        setDrawer(open: false)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 }
 
