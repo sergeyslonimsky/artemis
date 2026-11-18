@@ -1,3 +1,4 @@
+import AVFoundation
 import Speech
 import SwiftUI
 
@@ -381,37 +382,150 @@ struct DeviceDataSettingsView: View {
 
 struct VoiceSettingsView: View {
     @AppStorage(VoicePreferences.localeKey) private var selected = Locale.current.identifier
+
+    var body: some View {
+        Form {
+            Section {
+                NavigationLink {
+                    SpokenLanguageView(selected: $selected)
+                } label: {
+                    LabeledContent("Spoken language", value: Locale(identifier: selected).displayName)
+                }
+            } footer: {
+                Text("Used to recognize your speech in voice mode and dictation, on this device. A language is downloaded the first time you use it.")
+            }
+
+            Section {
+                LabeledContent(spokenLanguageName, value: replyVoice.map(VoiceLabel.title) ?? "None installed")
+                NavigationLink("Installed voices") { InstalledVoicesView() }
+            } header: {
+                Text("Voices")
+            } footer: {
+                Text("Replies are read with the best voice installed for their language. For natural speech, download an Enhanced or Premium voice in Settings › Accessibility › Read & Speak › Voices.")
+            }
+        }
+        .navigationTitle("Voice & dictation")
+        .navigationBarTitleDisplayMode(.inline)
+        // Voices may have been downloaded in Settings while the app was in the background.
+        .onAppear { refreshVoice() }
+        .onChange(of: selected) { refreshVoice() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            refreshVoice()
+        }
+    }
+
+    @State private var replyVoice: AVSpeechSynthesisVoice?
+
+    private var spokenLanguageCode: String {
+        Locale(identifier: selected).language.languageCode?.identifier ?? "en"
+    }
+
+    private var spokenLanguageName: String {
+        Locale.current.localizedString(forLanguageCode: spokenLanguageCode) ?? spokenLanguageCode
+    }
+
+    private func refreshVoice() {
+        replyVoice = SpeechOutput.bestVoice(for: spokenLanguageCode)
+    }
+}
+
+private enum VoiceLabel {
+    /// "Ava (Premium)"; default-quality voices are shown by name only, as in Settings.
+    static func title(_ voice: AVSpeechSynthesisVoice) -> String {
+        quality(voice).map { "\(voice.name) (\($0))" } ?? voice.name
+    }
+
+    static func quality(_ voice: AVSpeechSynthesisVoice) -> String? {
+        switch voice.quality {
+        case .premium: "Premium"
+        case .enhanced: "Enhanced"
+        default: nil
+        }
+    }
+}
+
+/// Every installed voice, grouped by language; the one replies use is checked.
+private struct InstalledVoicesView: View {
+    private struct LanguageGroup: Identifiable {
+        let code: String
+        let name: String
+        let voices: [AVSpeechSynthesisVoice]
+        let used: AVSpeechSynthesisVoice?
+        var id: String { code }
+    }
+
+    @State private var groups: [LanguageGroup] = []
+
+    var body: some View {
+        List(groups) { group in
+            Section(group.name) {
+                ForEach(group.voices, id: \.identifier) { voice in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(voice.name)
+                            Text(subtitle(for: voice))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if voice.identifier == group.used?.identifier {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Installed voices")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { load() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            load()
+        }
+    }
+
+    private func subtitle(for voice: AVSpeechSynthesisVoice) -> String {
+        let region = Locale.Language(identifier: voice.language).displayName ?? voice.language
+        return [region, VoiceLabel.quality(voice)].compactMap(\.self).joined(separator: " · ")
+    }
+
+    private func load() {
+        let byLanguage = Dictionary(grouping: SpeechOutput.installedVoices()) { voice in
+            Locale.Language(identifier: voice.language).languageCode?.identifier ?? voice.language
+        }
+        groups = byLanguage.map { code, voices in
+            LanguageGroup(
+                code: code,
+                name: Locale.current.localizedString(forLanguageCode: code) ?? code,
+                voices: voices.sorted {
+                    if $0.quality != $1.quality { return $0.quality.rawValue > $1.quality.rawValue }
+                    return $0.name < $1.name
+                },
+                used: SpeechOutput.bestVoice(for: code)
+            )
+        }
+        .sorted { $0.name < $1.name }
+    }
+}
+
+private struct SpokenLanguageView: View {
+    @Binding var selected: String
+    @Environment(\.dismiss) private var dismiss
     @State private var suggested: [Locale] = []
     @State private var others: [Locale] = []
 
     var body: some View {
-        Form {
-            Picker("Spoken language", selection: $selected) {
-                Section {
-                    languageRows(suggested)
-                } header: {
-                    Text("Spoken language")
-                } footer: {
-                    Text("Used to recognize your speech in voice mode and dictation, on this device. A language is downloaded the first time you use it.")
-                }
-                if !others.isEmpty {
-                    Section("Other languages") {
-                        languageRows(others)
-                    }
-                }
+        List {
+            Section("Suggested") {
+                languageRows(suggested)
             }
-            .pickerStyle(.inline)
-            .labelsHidden()
-
-            Section {
-                Text("Replies are read with the best voice installed for their language. For natural speech, download an Enhanced or Premium voice in Settings › Accessibility › Spoken Content › Voices.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            } header: {
-                Text("Voices")
+            if !others.isEmpty {
+                Section("Other languages") {
+                    languageRows(others)
+                }
             }
         }
-        .navigationTitle("Voice & dictation")
+        .navigationTitle("Spoken language")
         .navigationBarTitleDisplayMode(.inline)
         .task {
             suggested = await VoiceSession.suggestedLocales(current: Locale(identifier: selected))
@@ -424,7 +538,20 @@ struct VoiceSettingsView: View {
 
     private func languageRows(_ locales: [Locale]) -> some View {
         ForEach(locales, id: \.identifier) { locale in
-            Text(locale.displayName).tag(locale.identifier)
+            Button {
+                selected = locale.identifier
+                dismiss()
+            } label: {
+                HStack {
+                    Text(locale.displayName)
+                        .foregroundStyle(Color.primary)
+                    Spacer()
+                    if locale.identifier == selected {
+                        Image(systemName: "checkmark")
+                            .foregroundStyle(Color.accentColor)
+                    }
+                }
+            }
         }
     }
 }
