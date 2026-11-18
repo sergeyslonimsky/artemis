@@ -13,6 +13,8 @@ public enum MessageStatus: String, Codable, Sendable {
     case done
     case failed
     case cancelled
+    /// Placeholder asking the user to approve sending this turn to the cloud.
+    case awaitingConsent = "awaiting_consent"
 }
 
 public struct MessageStats: Codable, Equatable, Sendable {
@@ -49,8 +51,8 @@ public struct Message: Identifiable, Codable, Equatable, Sendable {
     public var backend: BackendKind?
     public var providerId: String?
     public var model: String?
-    /// Why the router picked `backend` (filled in once routing exists).
-    public var routeReason: String?
+    /// Why the router picked `backend` (or why consent is asked).
+    public var routeReason: RouteReason?
 
     public init(
         id: String = UUID().uuidString.lowercased(),
@@ -67,7 +69,7 @@ public struct Message: Identifiable, Codable, Equatable, Sendable {
         backend: BackendKind? = nil,
         providerId: String? = nil,
         model: String? = nil,
-        routeReason: String? = nil
+        routeReason: RouteReason? = nil
     ) {
         self.id = id
         self.chatId = chatId
@@ -123,7 +125,7 @@ extension Message: FetchableRecord, PersistableRecord, TableRecord {
         container[Columns.backend] = backend?.rawValue
         container[Columns.providerId] = providerId
         container[Columns.model] = model
-        container[Columns.routeReason] = routeReason
+        container[Columns.routeReason] = routeReason?.rawValue
 
         if let stats = stats {
             container[Columns.tokens] = stats.tokens
@@ -153,7 +155,8 @@ extension Message: FetchableRecord, PersistableRecord, TableRecord {
         backend = backendRaw.flatMap(BackendKind.init(rawValue:))
         providerId = row[Columns.providerId]
         model = row[Columns.model]
-        routeReason = row[Columns.routeReason]
+        let reasonRaw: String? = row[Columns.routeReason]
+        routeReason = reasonRaw.flatMap(RouteReason.init(rawValue:))
 
         if let tokens: Int = row[Columns.tokens] {
             let estimated: Int? = row[Columns.tokensEstimated]

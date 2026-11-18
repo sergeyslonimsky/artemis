@@ -7,19 +7,23 @@ public struct LLMRequest: Sendable {
     public var systemPrompt: String?
     public var preset: Preset?
     public var capabilities: ProviderCapabilities
+    /// Asks the gateway to run its own web search/fetch tool loop (OpenRouter-style `plugins` marker).
+    public var webSearch: Bool
 
     public init(
         model: String,
         messages: [Message],
         systemPrompt: String? = nil,
         preset: Preset? = nil,
-        capabilities: ProviderCapabilities = ProviderKind.custom.capabilities
+        capabilities: ProviderCapabilities = ProviderKind.custom.capabilities,
+        webSearch: Bool = false
     ) {
         self.model = model
         self.messages = messages
         self.systemPrompt = systemPrompt
         self.preset = preset
         self.capabilities = capabilities
+        self.webSearch = webSearch
     }
 
     public func encodeToJSONData() throws -> Data {
@@ -54,6 +58,7 @@ public struct LLMRequest: Sendable {
             messages: wireMessages,
             stream: true,
             streamOptions: capabilities.supportsStreamUsage ? .init(includeUsage: true) : nil,
+            plugins: webSearch ? [WirePlugin(id: "web")] : nil,
             temperature: preset?.temperature,
             topP: preset?.topP,
             frequencyPenalty: preset?.frequencyPenalty,
@@ -114,6 +119,8 @@ private struct WireRequest: Encodable {
     let messages: [WireMessage]
     let stream: Bool
     let streamOptions: WireStreamOptions?
+    /// Omitted unless used: providers that reject unknown fields would fail every request.
+    let plugins: [WirePlugin]?
     let temperature: Double?
     let topP: Double?
     let frequencyPenalty: Double?
@@ -122,6 +129,7 @@ private struct WireRequest: Encodable {
     enum CodingKeys: String, CodingKey {
         case model, messages, stream
         case streamOptions = "stream_options"
+        case plugins
         case temperature
         case topP = "top_p"
         case frequencyPenalty = "frequency_penalty"
@@ -134,6 +142,10 @@ private struct WireStreamOptions: Encodable {
     enum CodingKeys: String, CodingKey {
         case includeUsage = "include_usage"
     }
+}
+
+private struct WirePlugin: Encodable {
+    let id: String
 }
 
 private struct WireMessage: Encodable {

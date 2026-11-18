@@ -23,7 +23,8 @@ public struct OpenAICompatibleBackend: ChatBackend {
             messages: turn.messages,
             systemPrompt: turn.systemPrompt,
             preset: turn.preset,
-            capabilities: provider.capabilities
+            capabilities: provider.capabilities,
+            webSearch: turn.allowsWebSearch && provider.supportsWebSearch(model: model)
         ))
     }
 }

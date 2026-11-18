@@ -26,6 +26,7 @@ targets:
         PRODUCT_NAME: Artemis
         PRODUCT_BUNDLE_IDENTIFIER: com.artemis.ios
         CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: PLFAQZ6LX2
         INFOPLIST_KEY_CFBundleDisplayName: "Artemis"
         GENERATE_INFOPLIST_FILE: YES
         CURRENT_PROJECT_VERSION: 1

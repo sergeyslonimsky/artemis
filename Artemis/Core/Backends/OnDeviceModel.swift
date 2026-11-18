@@ -50,6 +50,22 @@ public enum OnDeviceModelStatus: Equatable, Sendable {
 
 /// Entry points for the on-device model that don't need a session.
 public enum OnDeviceModel {
+    /// Display names of the languages the model supports, sorted.
+    public static var supportedLanguageNames: [String] {
+        SystemLanguageModel.default.supportedLanguages
+            .compactMap { language in
+                language.languageCode.flatMap { Locale.current.localizedString(forLanguageCode: $0.identifier) }
+                    .map { name in
+                        guard let region = language.region,
+                              let regionName = Locale.current.localizedString(forRegionCode: region.identifier) else {
+                            return name
+                        }
+                        return "\(name) (\(regionName))"
+                    }
+            }
+            .sorted()
+    }
+
     /// Loads the model into memory ahead of the first request.
     public static func prewarm() {
         guard OnDeviceModelStatus.current.isAvailable else { return }

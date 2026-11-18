@@ -32,7 +32,8 @@ public actor AutoTitlingService {
         let turn = ChatTurn(
             messages: [Message(chatId: chatId, role: .user, content: titlePrompt)],
             systemPrompt: "You write short, descriptive titles for chat conversations.",
-            usesAssistantPersona: false
+            usesAssistantPersona: false,
+            allowsWebSearch: false
         )
 
         var accumulated = ""

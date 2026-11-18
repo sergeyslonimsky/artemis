@@ -1,5 +1,11 @@
 import Foundation
 
+/// A model as listed by `/models`.
+public struct ModelInfo: Equatable, Sendable {
+    public var id: String
+    public var capabilities: [String]
+}
+
 public final class LLMClient: Sendable {
     public let baseUrl: String
     public let apiKey: String
@@ -27,7 +33,7 @@ public final class LLMClient: Sendable {
     }
 
     // MARK: - Fetch Models
-    public func fetchModels() async throws -> [String] {
+    public func fetchModels() async throws -> [ModelInfo] {
         guard let url = modelsURL else {
             throw URLError(.badURL)
         }
@@ -47,12 +53,16 @@ public final class LLMClient: Sendable {
         struct ModelsResponse: Decodable {
             struct ModelItem: Decodable {
                 let id: String
+                /// Gateway extension, e.g. `["tools", "image_input"]`; absent on most providers.
+                let capabilities: [String]?
             }
             let data: [ModelItem]
         }
 
         let decoded = try JSONDecoder().decode(ModelsResponse.self, from: data)
-        return decoded.data.map(\.id).sorted()
+        return decoded.data
+            .map { ModelInfo(id: $0.id, capabilities: $0.capabilities ?? []) }
+            .sorted { $0.id < $1.id }
     }
 
     // MARK: - Streaming

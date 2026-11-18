@@ -65,8 +65,8 @@ ChatService (@MainActor @Observable, orchestrator)
 ### Роутер (Auto)
 
 1. **Правила → облако** (с причиной):
-   - есть **изображения** — всегда в облако (on-device vision/OCR ненадёжен: почерк, мелкий текст, детали);
-     PDF/документы — если локальная модель не поддерживает тип;
+   - есть файл, тип которого локальная модель не поддерживает (`supportsDataAttachmentType`). Картинки и текстовые
+     файлы идут локально — решение по тексту запроса принимает классификатор (он знает о вложении);
    - оценка токенов истории + запроса > бюджета on-device (≈ 4096 всего, оставляем ~1000 на ответ);
    - язык запроса (`NLLanguageRecognizer`) не поддерживается `SystemLanguageModel.default.supportsLocale`;
    - on-device модель недоступна.
@@ -238,14 +238,21 @@ ALTER TABLE providers ADD COLUMN kind TEXT NOT NULL DEFAULT 'custom';
   ⚠️ Simulator не поддерживает инференс Foundation Models (`operationNotAllowed: Simulator is not supported`) —
   on-device тестируем только на устройстве.
 
-### Этап 3 — Роутер и политика облака
+### Этап 3 — Роутер и политика облака ✅
 
-- [ ] `Router`: правила → классификатор (`@Generable RouteVerdict`) → `CloudPolicy`.
-- [ ] Автоэскалация по ошибкам on-device.
-- [ ] Consent card (`alwaysAsk`), поведение `deny` (локальный ответ + пометка), `alwaysAllow`.
-- [ ] Кнопка «Ask cloud» под локальными ответами.
-- [ ] Фаза `Choosing model…`; причина роутинга в popover бейджа.
-- DoD: Auto-режим работает для всех трёх политик; причины видны пользователю.
+- [x] `Router`: явные режимы → правила (`RoutingRules`) → on-device классификатор (`@Generable RequestCategory`,
+      greedy, таймаут 4 с, при сбое — on-device). Классификатор знает о вложениях; без облака решение «нужно облако»
+      сохраняется как причина у локального ответа.
+- [x] Правила Auto: неподдерживаемый тип файла (`supportsDataAttachmentType`), неподдерживаемый язык
+      (`NLLanguageRecognizer` + `supportsLocale`), длинный ввод, small talk. Картинки и текстовые файлы — локально.
+- [x] `CloudPolicy.apply` (`deny` / `alwaysAsk` / `alwaysAllow`); подтверждение — один раз на чат (`chats.cloud_allowed`,
+      миграция v9), карточка `awaiting_consent` в ленте.
+- [x] Автоэскалация после ошибки on-device (через ту же политику), кнопка «Ask cloud», причина маршрута в поповере
+      бейджа, фаза «Choosing model…».
+- [x] Веб-поиск как в десктопе: `capabilities` моделей из `/models` (миграция v10), `plugins: [{"id":"web"}]`
+      для моделей с `tools`; служебные запросы без поиска.
+- [x] Провайдер нельзя сохранить без моделей; ручной ввод model ID.
+- [x] Settings → Routing: режим по умолчанию и политика облака; список языков on-device модели.
 
 ### Этап 4 — UI и настройки
 

@@ -18,6 +18,8 @@ public struct Chat: Identifiable, Codable, Equatable, Sendable {
     public var model: String?
     /// `nil` follows `AppSettings.routingMode`.
     public var routingMode: RoutingMode?
+    /// The user approved automatic cloud use for this chat ("Don't ask again in this chat").
+    public var cloudAllowed: Bool
 
     public init(
         id: String = UUID().uuidString.lowercased(),
@@ -27,7 +29,8 @@ public struct Chat: Identifiable, Codable, Equatable, Sendable {
         updatedAt: Date = Date(),
         providerId: String? = nil,
         model: String? = nil,
-        routingMode: RoutingMode? = nil
+        routingMode: RoutingMode? = nil,
+        cloudAllowed: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -37,6 +40,7 @@ public struct Chat: Identifiable, Codable, Equatable, Sendable {
         self.providerId = providerId
         self.model = model
         self.routingMode = routingMode
+        self.cloudAllowed = cloudAllowed
     }
 }
 
@@ -53,6 +57,7 @@ extension Chat: FetchableRecord, PersistableRecord, TableRecord {
         public static let providerId = Column("provider_id")
         public static let model = Column("model")
         public static let routingMode = Column("routing_mode")
+        public static let cloudAllowed = Column("cloud_allowed")
     }
 
     public func encode(to container: inout PersistenceContainer) throws {
@@ -64,6 +69,7 @@ extension Chat: FetchableRecord, PersistableRecord, TableRecord {
         container[Columns.providerId] = providerId
         container[Columns.model] = model
         container[Columns.routingMode] = routingMode?.rawValue
+        container[Columns.cloudAllowed] = cloudAllowed ? 1 : 0
     }
 
     public init(row: Row) throws {
@@ -79,5 +85,7 @@ extension Chat: FetchableRecord, PersistableRecord, TableRecord {
         model = row[Columns.model]
         let modeRaw: String? = row[Columns.routingMode]
         routingMode = modeRaw.flatMap(RoutingMode.init(rawValue:))
+        let allowedInt: Int = row[Columns.cloudAllowed]
+        cloudAllowed = allowedInt != 0
     }
 }

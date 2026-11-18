@@ -73,6 +73,25 @@ extension AppDatabase {
         }
     }
 
+    public func setChatCloudAllowed(chatId: String, allowed: Bool) throws {
+        try dbWriter.write { db in
+            try db.execute(
+                sql: "UPDATE chats SET cloud_allowed = ? WHERE id = ?",
+                arguments: [allowed ? 1 : 0, chatId]
+            )
+        }
+    }
+
+    /// Unanswered cloud-consent prompts are dropped once the conversation moves on.
+    public func deletePendingConsents(chatId: String) throws {
+        try dbWriter.write { db in
+            try db.execute(
+                sql: "DELETE FROM messages WHERE chat_id = ? AND status = ?",
+                arguments: [chatId, MessageStatus.awaitingConsent.rawValue]
+            )
+        }
+    }
+
     public func setChatRoutingMode(chatId: String, mode: RoutingMode?) throws {
         try dbWriter.write { db in
             try db.execute(

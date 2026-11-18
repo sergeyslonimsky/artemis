@@ -1,6 +1,13 @@
 import SwiftUI
 import MarkdownUI
 
+/// The user's answer to a cloud-consent prompt.
+public enum ConsentChoice {
+    /// Send this turn and stop asking in this chat.
+    case allow
+    case answerOnDevice
+}
+
 public struct MessageBubbleView: View {
     public let message: Message
     /// Live text from `ChatService` while the reply is generated.
@@ -8,6 +15,11 @@ public struct MessageBubbleView: View {
     /// Display name of `message.providerId`, if the provider still exists.
     public var providerName: String?
     public var onRegenerate: (() -> Void)?
+    /// Re-answer an on-device reply with the cloud model; `nil` hides the action.
+    public var onAskCloud: (() -> Void)?
+    public var onConsent: ((ConsentChoice) -> Void)?
+    /// Whether the chat has a cloud model to escalate to.
+    public var cloudAvailable: Bool
 
     @State private var copied: Bool = false
 
@@ -15,12 +27,22 @@ public struct MessageBubbleView: View {
         message: Message,
         live: ChatRunState? = nil,
         providerName: String? = nil,
-        onRegenerate: (() -> Void)? = nil
+        onRegenerate: (() -> Void)? = nil,
+        onAskCloud: (() -> Void)? = nil,
+        onConsent: ((ConsentChoice) -> Void)? = nil,
+        cloudAvailable: Bool = true
     ) {
         self.message = message
         self.live = live
         self.providerName = providerName
         self.onRegenerate = onRegenerate
+        self.onAskCloud = onAskCloud
+        self.onConsent = onConsent
+        self.cloudAvailable = cloudAvailable
+    }
+
+    private var cloudLabel: String {
+        [providerName, message.model].compactMap { $0 }.joined(separator: " · ").nonEmpty ?? "the cloud"
     }
 
     private var isStreaming: Bool {
@@ -39,6 +61,8 @@ public struct MessageBubbleView: View {
         VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
             if message.role == .user {
                 userBubble
+            } else if message.status == .awaitingConsent {
+                consentCard
             } else {
                 assistantBubble
             }
@@ -108,8 +132,18 @@ public struct MessageBubbleView: View {
                 errorBanner
             }
 
+            if message.backend == .onDevice, !isStreaming, let reason = message.routeReason, reason.prefersCloud {
+                Label(
+                    "A cloud model may answer this better: \(reason.explanation)."
+                        + (cloudAvailable ? "" : " Choose a cloud model to use it."),
+                    systemImage: "info.circle"
+                )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             if let backend = message.backend {
-                BackendBadge(kind: backend, providerName: providerName, model: message.model)
+                BackendBadge(kind: backend, providerName: providerName, model: message.model, reason: message.routeReason)
             }
 
             if !isStreaming {
@@ -117,6 +151,32 @@ public struct MessageBubbleView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Consent
+
+    private var consentCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Send to the cloud?", systemImage: "cloud")
+                .font(.subheadline.weight(.semibold))
+
+            Text("This request is better handled by \(cloudLabel) because \(message.routeReason?.explanation ?? "it needs a more capable model"). The conversation will be sent to that provider, and this chat won't ask again.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 8) {
+                Button("Send") { onConsent?(.allow) }
+                    .buttonStyle(.borderedProminent)
+                Button("Answer on-device") { onConsent?(.answerOnDevice) }
+                    .buttonStyle(.bordered)
+            }
+            .controlSize(.small)
+
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.accentColor.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     private var errorBanner: some View {
@@ -180,6 +240,15 @@ public struct MessageBubbleView: View {
                 .buttonStyle(.plain)
             }
 
+            if let onAskCloud {
+                Button(action: onAskCloud) {
+                    Label("Ask cloud", systemImage: "cloud")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+
             if let onRegenerate = onRegenerate {
                 Button(action: onRegenerate) {
                     Label(message.status == .failed ? "Retry" : "Regenerate", systemImage: "arrow.clockwise")
@@ -201,8 +270,33 @@ struct BackendBadge: View {
     let kind: BackendKind
     let providerName: String?
     let model: String?
+    var reason: RouteReason?
+
+    @State private var showingReason = false
 
     var body: some View {
+        Button {
+            showingReason = true
+        } label: {
+            label
+        }
+        .buttonStyle(.plain)
+        .disabled(reason == nil)
+        .popover(isPresented: $showingReason) {
+            Text(reasonText)
+                .font(.callout)
+                .padding()
+                .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    private var reasonText: String {
+        guard let reason else { return "" }
+        let prefix = kind == .onDevice ? "Answered on-device" : "Sent to the cloud"
+        return "\(prefix): \(reason.explanation)."
+    }
+
+    private var label: some View {
         Label(title, systemImage: kind == .onDevice ? "iphone" : "cloud")
             .font(.caption2.weight(.medium))
             .lineLimit(1)

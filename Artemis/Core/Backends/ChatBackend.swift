@@ -9,17 +9,21 @@ public struct ChatTurn: Sendable {
     /// `false` for utility requests (titles, classification): the backend uses `systemPrompt`
     /// alone instead of wrapping it in the assistant persona.
     public var usesAssistantPersona: Bool
+    /// Utility requests never need the internet; skipping search keeps them fast and cheap.
+    public var allowsWebSearch: Bool
 
     public init(
         messages: [Message],
         systemPrompt: String? = nil,
         preset: Preset? = nil,
-        usesAssistantPersona: Bool = true
+        usesAssistantPersona: Bool = true,
+        allowsWebSearch: Bool = true
     ) {
         self.messages = messages
         self.systemPrompt = systemPrompt
         self.preset = preset
         self.usesAssistantPersona = usesAssistantPersona
+        self.allowsWebSearch = allowsWebSearch
     }
 }
 

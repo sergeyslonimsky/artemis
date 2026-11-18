@@ -74,10 +74,19 @@ public struct Provider: Identifiable, Codable, Equatable, Sendable {
     public var baseUrl: String
     public var models: [String]
     public var defaultModel: String
+    /// Per-model capabilities reported by `/models` (e.g. `"tools"`). Models added by hand have none.
+    public var modelCapabilities: [String: [String]]
     public var createdAt: Date
     public var updatedAt: Date
 
     public var capabilities: ProviderCapabilities { kind.capabilities }
+
+    /// Capability that marks a model the gateway can run its web search/fetch tool loop for.
+    public static let toolsCapability = "tools"
+
+    public func supportsWebSearch(model: String) -> Bool {
+        modelCapabilities[model]?.contains(Self.toolsCapability) == true
+    }
 
     public init(
         id: String = UUID().uuidString.lowercased(),
@@ -86,6 +95,7 @@ public struct Provider: Identifiable, Codable, Equatable, Sendable {
         baseUrl: String,
         models: [String] = [],
         defaultModel: String = "",
+        modelCapabilities: [String: [String]] = [:],
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -95,6 +105,7 @@ public struct Provider: Identifiable, Codable, Equatable, Sendable {
         self.baseUrl = baseUrl
         self.models = models
         self.defaultModel = defaultModel.isEmpty ? (models.first ?? "") : defaultModel
+        self.modelCapabilities = modelCapabilities
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -111,6 +122,7 @@ extension Provider: FetchableRecord, PersistableRecord, TableRecord {
         public static let baseUrl = Column("base_url")
         public static let models = Column("models")
         public static let defaultModel = Column("default_model")
+        public static let modelCapabilities = Column("model_capabilities")
         public static let createdAt = Column("created_at")
         public static let updatedAt = Column("updated_at")
     }
@@ -124,6 +136,8 @@ extension Provider: FetchableRecord, PersistableRecord, TableRecord {
         let jsonString = String(data: data, encoding: .utf8) ?? "[]"
         container[Columns.models] = jsonString
         container[Columns.defaultModel] = defaultModel
+        let capabilitiesData = try JSONEncoder().encode(modelCapabilities)
+        container[Columns.modelCapabilities] = String(data: capabilitiesData, encoding: .utf8) ?? "{}"
         container[Columns.createdAt] = Int64(createdAt.timeIntervalSince1970 * 1000)
         container[Columns.updatedAt] = Int64(updatedAt.timeIntervalSince1970 * 1000)
     }
@@ -142,6 +156,8 @@ extension Provider: FetchableRecord, PersistableRecord, TableRecord {
             models = []
         }
         defaultModel = row[Columns.defaultModel]
+        let capabilitiesJSON: String = row[Columns.modelCapabilities]
+        modelCapabilities = (try? JSONDecoder().decode([String: [String]].self, from: Data(capabilitiesJSON.utf8))) ?? [:]
         let createdMillis: Int64 = row[Columns.createdAt]
         let updatedMillis: Int64 = row[Columns.updatedAt]
         createdAt = Date(timeIntervalSince1970: TimeInterval(createdMillis) / 1000.0)

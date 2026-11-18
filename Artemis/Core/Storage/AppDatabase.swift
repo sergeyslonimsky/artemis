@@ -245,6 +245,16 @@ public final class AppDatabase: Sendable {
             }
         }
 
+        // Migration 9: per-chat consent for automatic cloud use
+        migrator.registerMigration("v9_chat_cloud_consent") { db in
+            try db.execute(sql: "ALTER TABLE chats ADD COLUMN cloud_allowed INTEGER NOT NULL DEFAULT 0")
+        }
+
+        // Migration 10: per-model capabilities from /models (web search via the gateway's tool loop)
+        migrator.registerMigration("v10_model_capabilities") { db in
+            try db.execute(sql: "ALTER TABLE providers ADD COLUMN model_capabilities TEXT NOT NULL DEFAULT '{}'")
+        }
+
         return migrator
     }
 

@@ -40,12 +40,16 @@ public struct ChatView: View {
                 ScrollView {
                     LazyVStack(spacing: 12) {
                         ForEach(messages) { msg in
-                            MessageBubbleView(
-                                message: msg,
-                                live: chatService.liveState(chatId: chatId, messageId: msg.id),
-                                providerName: providers.first { $0.id == msg.providerId }?.name,
-                                onRegenerate: msg.role == .assistant && !isBusy ? { regenerate(from: msg) } : nil
-                            )
+                            bubble(for: msg)
+                        }
+
+                        if chatService.isRouting(chatId: chatId) {
+                            Text("Choosing model…")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .shimmer(active: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 16)
                         }
 
                         Color.clear
@@ -113,6 +117,20 @@ public struct ChatView: View {
         }
     }
 
+    private func bubble(for message: Message) -> some View {
+        let canAct = message.role == .assistant && !isBusy
+        let canAskCloud = canAct && message.backend == .onDevice && cloudTarget != nil
+        return MessageBubbleView(
+            message: message,
+            live: chatService.liveState(chatId: chatId, messageId: message.id),
+            providerName: providers.first { $0.id == message.providerId }?.name,
+            onRegenerate: canAct ? { perform { try chatService.regenerate(chatId: chatId, fromMessageId: message.id, route: routeRequest, preset: selectedPreset) } } : nil,
+            onAskCloud: canAskCloud ? { perform { try chatService.askCloud(chatId: chatId, replacing: message.id, route: routeRequest, preset: selectedPreset) } } : nil,
+            onConsent: { choice in resolveConsent(message, choice: choice) },
+            cloudAvailable: cloudTarget != nil
+        )
+    }
+
     // MARK: - Observation
 
     private func observeChat() async {
@@ -150,19 +168,14 @@ public struct ChatView: View {
     private func loadDefaults() {
         settings = (try? database.fetchSettings()) ?? AppSettings()
         onDeviceStatus = .current
-        if replyTargetIsOnDevice {
+        if effectiveMode != .cloud {
             OnDeviceModel.prewarm()
         }
         guard let presetId = settings.defaultPresetId else { return }
         selectedPreset = try? database.fetchPresets().first { $0.id == presetId }
     }
 
-    private var replyTargetIsOnDevice: Bool {
-        if case .onDevice = replyTarget { return true }
-        return false
-    }
-
-    /// Picks the chat's saved model, falling back to the default provider. Keeps a valid current choice.
+    /// Picks the chat's saved cloud model, falling back to the default provider. Keeps a valid current choice.
     private func resolveSelection() {
         // Wait for the chat so its saved model wins over the defaults.
         guard chat != nil else { return }
@@ -177,7 +190,7 @@ public struct ChatView: View {
             return
         }
 
-        let defaultId = (try? database.fetchSettings())?.defaultProviderId
+        let defaultId = settings.defaultProviderId ?? (try? database.fetchSettings())?.defaultProviderId
         guard let provider = providers.first(where: { $0.id == defaultId }) ?? providers.first else {
             selectedProviderId = nil
             selectedModel = ""
@@ -197,85 +210,95 @@ public struct ChatView: View {
         }
     }
 
-    /// Persists an explicit choice of the on-device model (or clears it back to the cloud model).
-    private func selectOnDevice() {
-        setRoutingMode(.onDevice)
-        OnDeviceModel.prewarm()
-    }
-
-    private func setRoutingMode(_ mode: RoutingMode?) {
+    private func setRoutingMode(_ mode: RoutingMode) {
         chat?.routingMode = mode
         do {
             try database.setChatRoutingMode(chatId: chatId, mode: mode)
         } catch {
             Self.logger.error("Failed to save routing mode: \(error.localizedDescription, privacy: .public)")
         }
+        if mode != .cloud {
+            OnDeviceModel.prewarm()
+        }
     }
 
-    // MARK: - Actions
+    // MARK: - Routing
 
-    /// Who answers the next message. Until the router exists (stage 3), Auto prefers the selected
-    /// cloud model and falls back to on-device when no provider is configured.
-    private var replyTarget: ReplyTarget? {
-        let cloud = selectedProvider.flatMap { provider in
-            selectedModel.isEmpty ? nil : ReplyTarget.cloud(provider, model: selectedModel)
-        }
-        switch chat?.routingMode ?? settings.routingMode {
-        case .onDevice:
-            return isOnDeviceUsable ? .onDevice : nil
-        case .cloud:
-            return cloud
-        case .auto:
-            return cloud ?? (isOnDeviceUsable ? .onDevice : nil)
-        }
+    private var effectiveMode: RoutingMode {
+        chat?.routingMode ?? settings.routingMode
+    }
+
+    private var cloudTarget: CloudTarget? {
+        guard let provider = selectedProvider, !selectedModel.isEmpty else { return nil }
+        return CloudTarget(provider: provider, model: selectedModel)
+    }
+
+    private var routeRequest: RouteRequest {
+        RouteRequest(mode: effectiveMode, cloud: cloudTarget)
     }
 
     private var isOnDeviceUsable: Bool {
         settings.onDeviceEnabled && onDeviceStatus.isAvailable
     }
 
-    private var routeLabel: String {
-        switch replyTarget {
-        case .onDevice: "On-device"
-        case .cloud(_, let model): model
-        case nil: ""
+    /// Whether the next message has anyone to answer it.
+    private var canSend: Bool {
+        switch effectiveMode {
+        case .onDevice: isOnDeviceUsable
+        case .cloud: cloudTarget != nil
+        case .auto: isOnDeviceUsable || cloudTarget != nil
         }
     }
 
+    private var routeLabel: String {
+        switch effectiveMode {
+        case .onDevice:
+            "On-device"
+        case .cloud:
+            selectedModel
+        case .auto:
+            cloudTarget.map { "Auto · \($0.model)" } ?? "Auto · On-device"
+        }
+    }
+
+    // MARK: - Actions
+
     private func sendCurrentMessage() {
-        guard let target = replyTarget else {
+        guard canSend else {
             showingModelPicker = true
             return
         }
 
         let prompt = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        do {
+        perform {
             try chatService.send(
                 chatId: chatId,
                 content: prompt,
                 attachments: attachments,
-                target: target,
+                route: routeRequest,
                 preset: selectedPreset
             )
             inputText = ""
             attachments = []
-        } catch {
-            errorMessage = error.localizedDescription
         }
     }
 
-    private func regenerate(from message: Message) {
-        guard let target = replyTarget else {
-            showingModelPicker = true
-            return
-        }
-        do {
-            try chatService.regenerate(
+    private func resolveConsent(_ consent: Message, choice: ConsentChoice) {
+        perform {
+            try chatService.resolveConsent(
                 chatId: chatId,
-                fromMessageId: message.id,
-                target: target,
+                consent: consent,
+                allow: choice == .allow,
+                rememberForChat: choice == .allow,
+                route: routeRequest,
                 preset: selectedPreset
             )
+        }
+    }
+
+    private func perform(_ action: () throws -> Void) {
+        do {
+            try action()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -286,30 +309,19 @@ public struct ChatView: View {
         NavigationStack {
             List {
                 Section {
-                    Button {
-                        selectOnDevice()
-                        showingModelPicker = false
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    } label: {
-                        HStack {
-                            Label("Apple Intelligence", systemImage: "iphone")
-                                .foregroundStyle(isOnDeviceUsable ? .primary : .secondary)
-                            Spacer()
-                            if chat?.routingMode == .onDevice {
-                                Image(systemName: "checkmark")
-                                    .foregroundStyle(Color.accentColor)
-                            }
-                        }
+                    Picker("Mode", selection: Binding(get: { effectiveMode }, set: { setRoutingMode($0) })) {
+                        Text("Auto").tag(RoutingMode.auto)
+                        Text("On-device").tag(RoutingMode.onDevice)
+                        Text("Cloud").tag(RoutingMode.cloud)
                     }
-                    .disabled(!isOnDeviceUsable)
-                } header: {
-                    Text("On-device")
+                    .pickerStyle(.segmented)
+                    .listRowBackground(Color.clear)
                 } footer: {
-                    Text(settings.onDeviceEnabled ? onDeviceStatus.detail : "The on-device model is turned off in Settings.")
+                    Text(modeDescription)
                 }
 
                 if providers.isEmpty {
-                    Section("Cloud") {
+                    Section("Cloud model") {
                         Text("Add a provider in Settings to use cloud models.")
                             .foregroundStyle(.secondary)
                     }
@@ -320,7 +332,9 @@ public struct ChatView: View {
                         ForEach(provider.models, id: \.self) { model in
                             Button {
                                 selectModel(model, of: provider)
-                                setRoutingMode(.cloud)
+                                if effectiveMode == .onDevice {
+                                    setRoutingMode(.cloud)
+                                }
                                 showingModelPicker = false
                                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                             } label: {
@@ -328,7 +342,7 @@ public struct ChatView: View {
                                     Text(model)
                                         .foregroundStyle(.primary)
                                     Spacer()
-                                    if chat?.routingMode != .onDevice && selectedProviderId == provider.id && selectedModel == model {
+                                    if selectedProviderId == provider.id && selectedModel == model {
                                         Image(systemName: "checkmark")
                                             .foregroundStyle(Color.accentColor)
                                     }
@@ -338,13 +352,25 @@ public struct ChatView: View {
                     }
                 }
             }
-            .navigationTitle("Select Model")
+            .navigationTitle("Model")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { showingModelPicker = false }
                 }
             }
+        }
+    }
+
+    private var modeDescription: String {
+        let onDeviceNote = isOnDeviceUsable ? "" : " " + (settings.onDeviceEnabled ? onDeviceStatus.detail : "The on-device model is turned off in Settings.")
+        switch effectiveMode {
+        case .auto:
+            return "Answers on-device and uses the cloud model below only when needed." + onDeviceNote
+        case .onDevice:
+            return "Everything stays on this device." + onDeviceNote
+        case .cloud:
+            return "Every message goes to the cloud model below."
         }
     }
 }

@@ -62,6 +62,12 @@ public struct SettingsView: View {
                         Text(onDeviceStatus.title)
                             .foregroundStyle(onDeviceStatus.isAvailable ? .green : .secondary)
                     }
+                    if onDeviceStatus.isAvailable {
+                        NavigationLink("Supported languages") {
+                            List(OnDeviceModel.supportedLanguageNames, id: \.self) { Text($0) }
+                                .navigationTitle("Languages")
+                        }
+                    }
                     Toggle("Use on-device model", isOn: settingBinding(\.onDeviceEnabled))
                         .disabled(!onDeviceStatus.isAvailable)
                     Toggle("Generate chat titles on-device", isOn: settingBinding(\.onDeviceTitles))
@@ -70,6 +76,23 @@ public struct SettingsView: View {
                     Text("On-device model")
                 } footer: {
                     Text(onDeviceStatus.detail)
+                }
+
+                Section {
+                    Picker("Default mode", selection: settingBinding(\.routingMode)) {
+                        Text("Auto").tag(RoutingMode.auto)
+                        Text("On-device").tag(RoutingMode.onDevice)
+                        Text("Cloud").tag(RoutingMode.cloud)
+                    }
+                    Picker("Cloud in Auto mode", selection: settingBinding(\.cloudPolicy)) {
+                        Text("Always ask").tag(CloudPolicy.alwaysAsk)
+                        Text("Always allow").tag(CloudPolicy.alwaysAllow)
+                        Text("Never").tag(CloudPolicy.deny)
+                    }
+                } header: {
+                    Text("Routing")
+                } footer: {
+                    Text(cloudPolicyDescription)
                 }
 
                 Section(header: Text("General")) {
@@ -119,7 +142,20 @@ public struct SettingsView: View {
         }
     }
 
-    private func settingBinding(_ keyPath: WritableKeyPath<AppSettings, Bool>) -> Binding<Bool> {
+    private var cloudPolicyDescription: String {
+        let base: String
+        switch settings.cloudPolicy {
+        case .alwaysAsk:
+            base = "Auto mode asks before sending a message to your cloud provider."
+        case .alwaysAllow:
+            base = "Auto mode sends messages to your cloud provider whenever the on-device model isn't enough."
+        case .deny:
+            base = "Auto mode never sends messages to the cloud; the on-device model always answers."
+        }
+        return base + " Choosing Cloud mode or tapping Ask cloud always uses the cloud."
+    }
+
+    private func settingBinding<Value>(_ keyPath: WritableKeyPath<AppSettings, Value>) -> Binding<Value> {
         Binding(
             get: { settings[keyPath: keyPath] },
             set: {
@@ -165,10 +201,12 @@ struct ProviderEditView: View {
     @State private var baseUrl: String
     @State private var apiKey: String
     @State private var models: [String]
+    @State private var modelCapabilities: [String: [String]]
     @State private var defaultModel: String
     @State private var isTesting: Bool = false
     @State private var testError: String?
     @State private var testSuccess: Bool = false
+    @State private var newModel: String = ""
 
     let existingId: String?
     let existingCreatedAt: Date?
@@ -181,6 +219,7 @@ struct ProviderEditView: View {
         self._baseUrl = State(initialValue: provider?.baseUrl ?? "https://api.openai.com/v1")
         self._apiKey = State(initialValue: apiKey)
         self._models = State(initialValue: provider?.models ?? [])
+        self._modelCapabilities = State(initialValue: provider?.modelCapabilities ?? [:])
         self._defaultModel = State(initialValue: provider?.defaultModel ?? "")
         self.onSave = onSave
     }
@@ -223,14 +262,50 @@ struct ProviderEditView: View {
                     }
                 }
 
-                if !models.isEmpty {
-                    Section("Models") {
+                Section {
+                    if !models.isEmpty {
                         Picker("Default Model", selection: $defaultModel) {
                             ForEach(models, id: \.self) { model in
                                 Text(model).tag(model)
                             }
                         }
                     }
+                    ForEach(models, id: \.self) { model in
+                        HStack {
+                            Text(model)
+                                .font(.callout)
+                            Spacer()
+                            if modelCapabilities[model]?.contains(Provider.toolsCapability) == true {
+                                Image(systemName: "globe")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityLabel("Web search")
+                            }
+                        }
+                    }
+                    .onDelete { offsets in
+                        for model in offsets.map({ models[$0] }) {
+                            modelCapabilities.removeValue(forKey: model)
+                        }
+                        models.remove(atOffsets: offsets)
+                        if !models.contains(defaultModel) {
+                            defaultModel = models.first ?? ""
+                        }
+                    }
+                    HStack {
+                        TextField("Add model ID", text: $newModel)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .onSubmit(addModel)
+                        Button("Add", action: addModel)
+                            .disabled(newModel.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                } header: {
+                    Text("Models")
+                } footer: {
+                    Text(models.isEmpty
+                         ? "Add at least one model: tap Test & Fetch Models, or enter model IDs by hand if the provider can't list them."
+                         : "🌐 marks models that can search the web. Swipe to remove models you don't use.")
                 }
             }
             .navigationTitle(existingId == nil ? "Add Provider" : "Edit Provider")
@@ -247,15 +322,33 @@ struct ProviderEditView: View {
                             baseUrl: baseUrl,
                             models: models,
                             defaultModel: defaultModel.isEmpty ? (models.first ?? "") : defaultModel,
+                            modelCapabilities: modelCapabilities.filter { models.contains($0.key) },
                             createdAt: existingCreatedAt ?? Date()
                         )
                         onSave(provider, apiKey)
                         dismiss()
                     }
-                    .disabled(name.isEmpty || baseUrl.isEmpty)
+                    .disabled(!canSave)
                 }
             }
         }
+    }
+
+    /// A provider is only usable with at least one model to pick.
+    private var canSave: Bool {
+        !name.isEmpty && !baseUrl.isEmpty && !models.isEmpty
+    }
+
+    private func addModel() {
+        let model = newModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !model.isEmpty else { return }
+        if !models.contains(model) {
+            models.append(model)
+        }
+        if defaultModel.isEmpty {
+            defaultModel = model
+        }
+        newModel = ""
     }
 
     private func testAndFetchModels() {
@@ -268,9 +361,11 @@ struct ProviderEditView: View {
             do {
                 let fetched = try await client.fetchModels()
                 await MainActor.run {
-                    self.models = fetched
-                    if !fetched.isEmpty && (defaultModel.isEmpty || !fetched.contains(defaultModel)) {
-                        self.defaultModel = fetched.first!
+                    let ids = fetched.map(\.id)
+                    self.models = ids
+                    self.modelCapabilities = Dictionary(uniqueKeysWithValues: fetched.map { ($0.id, $0.capabilities) })
+                    if let first = ids.first, defaultModel.isEmpty || !ids.contains(defaultModel) {
+                        self.defaultModel = first
                     }
                     self.testSuccess = true
                     self.isTesting = false
