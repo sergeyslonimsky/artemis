@@ -65,12 +65,15 @@ ChatService (@MainActor @Observable, orchestrator)
 ### Роутер (Auto)
 
 1. **Правила → облако** (с причиной):
-   - есть вложения, которые локальная модель не принимает (PDF/документы; изображения — если API не поддерживает);
+   - есть **изображения** — всегда в облако (on-device vision/OCR ненадёжен: почерк, мелкий текст, детали);
+     PDF/документы — если локальная модель не поддерживает тип;
    - оценка токенов истории + запроса > бюджета on-device (≈ 4096 всего, оставляем ~1000 на ответ);
    - язык запроса (`NLLanguageRecognizer`) не поддерживается `SystemLanguageModel.default.supportsLocale`;
    - on-device модель недоступна.
 2. **Правила → локально**: очень короткие/тривиальные запросы (приветствие, «thanks», переформулируй/переведи
    короткий текст) — экономим вызов классификатора.
+   Запросы на **действия на устройстве** (будильник, напоминание, звонок) не эскалируем: облачная модель их тоже
+   не выполнит — локальная честно отвечает «не могу» (это прописано в её instructions).
 3. **Классификатор** (on-device, guided generation, низкая temperature, короткие instructions, только последний
    запрос + 1–2 предыдущих реплики):
    ```swift
@@ -216,14 +219,24 @@ ALTER TABLE providers ADD COLUMN kind TEXT NOT NULL DEFAULT 'custom';
 - Проверено на mock-сервере: метаданные в БД, бейдж, отсутствие `stream_options` для `mistral`.
   Не проверено вживую: ветки вложений по capabilities (покрыть тестами на этапе 5).
 
-### Этап 2 — On-device бэкенд
+### Этап 2 — On-device бэкенд ✅
 
-- [ ] `OnDeviceModelStatus` (availability + supportsLocale).
-- [ ] `AppleOnDeviceBackend`: сессия, восстановление истории, бюджет контекста, snapshot→delta, маппинг ошибок,
-      prewarm.
-- [ ] Режим чата «On-device» работает end-to-end.
-- [ ] Автозаголовки через on-device (fallback на облако, если недоступна и политика позволяет).
-- DoD: полностью офлайн-чат на поддерживаемом устройстве; на неподдерживаемом — понятный статус.
+- [x] Deployment target поднят до **iOS 27.2**: картинки (`Attachment`, 27.0) и файлы (`DataAttachmentRepresentable`, 27.2)
+      на вход локальной модели, `LanguageModelError`, `contextSize`/`tokenCount`.
+- [x] `OnDeviceModelStatus` (available / deviceNotEligible / appleIntelligenceNotEnabled / modelNotReady) + prewarm.
+- [x] `AppleOnDeviceBackend`: сессия из `Transcript` на каждый ход; бюджет контекста через `tokenCount`
+      (fallback-оценка, где он недоступен — например, Simulator), обрезка самых старых сообщений;
+      snapshot→delta, reasoning из transcript entries, токены из `usage`; ошибки → `OnDeviceError`.
+- [x] Пикер модели: «Apple Intelligence» (режим чата `on_device`); выбор облачной модели → `cloud`.
+      Auto до роутера: облако, если выбран провайдер, иначе on-device.
+- [x] Автозаголовки on-device (облако — только если сам ответ был облачным); служебные запросы без персоны
+      (`ChatTurn.usesAssistantPersona`).
+- [x] Instructions on-device явно перечисляют ограничения (нет интернета, нет действий на устройстве, нет памяти
+      между чатами) + текущая дата; модель должна признавать неуверенность вместо выдумки.
+- [x] Settings → «On-device model»: статус, «Use on-device model», «Generate chat titles on-device».
+- Проверено на iPhone 16e (iOS 27.2): чат, стрим, фото, файл, Stop/Regenerate, автозаголовок.
+  ⚠️ Simulator не поддерживает инференс Foundation Models (`operationNotAllowed: Simulator is not supported`) —
+  on-device тестируем только на устройстве.
 
 ### Этап 3 — Роутер и политика облака
 

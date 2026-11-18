@@ -15,7 +15,7 @@ targets:
   Artemis:
     type: application
     platform: iOS
-    deploymentTarget: "26.0"
+    deploymentTarget: "27.2"
     sources:
       - path: Artemis
     dependencies:

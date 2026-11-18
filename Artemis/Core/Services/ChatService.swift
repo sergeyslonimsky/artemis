@@ -11,6 +11,12 @@ public struct ChatRunState: Equatable, Sendable {
     public var isActive: Bool = true
 }
 
+/// Who should answer a turn.
+public enum ReplyTarget: Sendable {
+    case onDevice
+    case cloud(Provider, model: String)
+}
+
 /// Owns reply generation. Generation outlives any particular `ChatView`: views observe
 /// `runs` for live text and the database for everything else.
 @MainActor
@@ -53,31 +59,45 @@ public final class ChatService {
         chatId: String,
         content: String,
         attachments: [Attachment] = [],
-        provider: Provider,
-        model: String,
+        target: ReplyTarget,
         preset: Preset? = nil
     ) throws {
         cancel(chatId: chatId)
         let userMessage = Message(chatId: chatId, role: .user, content: content, attachments: attachments)
         try database.addMessage(userMessage)
-        try generateReply(chatId: chatId, backend: cloudBackend(provider: provider, model: model), preset: preset)
+        try generateReply(chatId: chatId, backend: backend(for: target), preset: preset)
     }
 
     /// Drops `messageId` and everything after it, then generates a fresh reply to the remaining history.
     public func regenerate(
         chatId: String,
         fromMessageId messageId: String,
-        provider: Provider,
-        model: String,
+        target: ReplyTarget,
         preset: Preset? = nil
     ) throws {
         cancel(chatId: chatId)
         try database.deleteMessagesFrom(chatId: chatId, messageId: messageId)
-        try generateReply(chatId: chatId, backend: cloudBackend(provider: provider, model: model), preset: preset)
+        try generateReply(chatId: chatId, backend: backend(for: target), preset: preset)
     }
 
-    private func cloudBackend(provider: Provider, model: String) -> OpenAICompatibleBackend {
-        OpenAICompatibleBackend(provider: provider, apiKey: database.apiKey(providerId: provider.id), model: model)
+    private func backend(for target: ReplyTarget) -> any ChatBackend {
+        switch target {
+        case .onDevice:
+            AppleOnDeviceBackend()
+        case .cloud(let provider, let model):
+            OpenAICompatibleBackend(provider: provider, apiKey: database.apiKey(providerId: provider.id), model: model)
+        }
+    }
+
+    /// Titles stay on-device when possible; a cloud reply may be titled by the same provider,
+    /// since that conversation was already sent there.
+    private func titlingBackend(for replyBackend: any ChatBackend) -> (any ChatBackend)? {
+        let settings = (try? database.fetchSettings()) ?? AppSettings()
+        let onDeviceUsable = settings.onDeviceEnabled && OnDeviceModelStatus.current.isAvailable
+        if onDeviceUsable && (settings.onDeviceTitles || replyBackend.descriptor.kind == .onDevice) {
+            return AppleOnDeviceBackend()
+        }
+        return replyBackend.descriptor.kind == .cloud ? replyBackend : nil
     }
 
     // MARK: - Generation
@@ -127,14 +147,14 @@ public final class ChatService {
         tasks.removeValue(forKey: chatId)
         endBackgroundTask(chatId: chatId)
 
-        guard outcome.status == .done else { return }
+        guard outcome.status == .done, let titler = titlingBackend(for: job.backend) else { return }
         let autoTitling = autoTitling
         Task {
             await autoTitling.generateTitleIfNeeded(
                 chatId: chatId,
                 userPrompt: outcome.lastUserPrompt,
                 assistantReply: outcome.content,
-                backend: job.backend
+                backend: titler
             )
         }
     }

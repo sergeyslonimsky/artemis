@@ -10,6 +10,7 @@ public struct SettingsView: View {
     @State private var showingAddProvider: Bool = false
     @State private var providerToEdit: Provider?
     @State private var saveError: String?
+    @State private var onDeviceStatus = OnDeviceModelStatus.current
 
     private let database = AppDatabase.shared
 
@@ -56,6 +57,21 @@ public struct SettingsView: View {
                 }
 
                 // General Preferences
+                Section {
+                    LabeledContent("Status") {
+                        Text(onDeviceStatus.title)
+                            .foregroundStyle(onDeviceStatus.isAvailable ? .green : .secondary)
+                    }
+                    Toggle("Use on-device model", isOn: settingBinding(\.onDeviceEnabled))
+                        .disabled(!onDeviceStatus.isAvailable)
+                    Toggle("Generate chat titles on-device", isOn: settingBinding(\.onDeviceTitles))
+                        .disabled(!onDeviceStatus.isAvailable || !settings.onDeviceEnabled)
+                } header: {
+                    Text("On-device model")
+                } footer: {
+                    Text(onDeviceStatus.detail)
+                }
+
                 Section(header: Text("General")) {
                     Toggle("Debug Mode (Headers)", isOn: Binding(
                         get: { settings.debugMode },
@@ -103,7 +119,18 @@ public struct SettingsView: View {
         }
     }
 
+    private func settingBinding(_ keyPath: WritableKeyPath<AppSettings, Bool>) -> Binding<Bool> {
+        Binding(
+            get: { settings[keyPath: keyPath] },
+            set: {
+                settings[keyPath: keyPath] = $0
+                try? database.saveSettings(settings)
+            }
+        )
+    }
+
     private func loadData() {
+        onDeviceStatus = .current
         providers = (try? database.fetchProviders()) ?? []
         presets = (try? database.fetchPresets()) ?? []
         settings = (try? database.fetchSettings()) ?? AppSettings()

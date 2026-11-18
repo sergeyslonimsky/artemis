@@ -15,6 +15,8 @@ public struct ChatView: View {
     @State private var selectedPreset: Preset?
     @State private var showingModelPicker: Bool = false
     @State private var errorMessage: String?
+    @State private var settings = AppSettings()
+    @State private var onDeviceStatus = OnDeviceModelStatus.current
 
     private let chatService = ChatService.shared
     private let database = AppDatabase.shared
@@ -69,7 +71,7 @@ public struct ChatView: View {
                 text: $inputText,
                 attachments: $attachments,
                 isBusy: isBusy,
-                currentModel: selectedModel,
+                currentModel: routeLabel,
                 currentPresetTitle: selectedPreset?.title,
                 onSend: sendCurrentMessage,
                 onStop: { chatService.cancel(chatId: chatId) },
@@ -83,8 +85,8 @@ public struct ChatView: View {
                     Text(chat?.title ?? "Chat")
                         .font(.headline)
                         .lineLimit(1)
-                    if !selectedModel.isEmpty {
-                        Text(selectedModel)
+                    if !routeLabel.isEmpty {
+                        Text(routeLabel)
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
@@ -105,7 +107,10 @@ public struct ChatView: View {
         .task { await observeChat() }
         .task { await observeMessages() }
         .task { await observeProviders() }
-        .task { loadDefaultPreset() }
+        .task { loadDefaults() }
+        .onChange(of: showingModelPicker) { _, showing in
+            if showing { onDeviceStatus = .current }
+        }
     }
 
     // MARK: - Observation
@@ -142,9 +147,19 @@ public struct ChatView: View {
         }
     }
 
-    private func loadDefaultPreset() {
-        guard let settings = try? database.fetchSettings(), let presetId = settings.defaultPresetId else { return }
+    private func loadDefaults() {
+        settings = (try? database.fetchSettings()) ?? AppSettings()
+        onDeviceStatus = .current
+        if replyTargetIsOnDevice {
+            OnDeviceModel.prewarm()
+        }
+        guard let presetId = settings.defaultPresetId else { return }
         selectedPreset = try? database.fetchPresets().first { $0.id == presetId }
+    }
+
+    private var replyTargetIsOnDevice: Bool {
+        if case .onDevice = replyTarget { return true }
+        return false
     }
 
     /// Picks the chat's saved model, falling back to the default provider. Keeps a valid current choice.
@@ -182,10 +197,53 @@ public struct ChatView: View {
         }
     }
 
+    /// Persists an explicit choice of the on-device model (or clears it back to the cloud model).
+    private func selectOnDevice() {
+        setRoutingMode(.onDevice)
+        OnDeviceModel.prewarm()
+    }
+
+    private func setRoutingMode(_ mode: RoutingMode?) {
+        chat?.routingMode = mode
+        do {
+            try database.setChatRoutingMode(chatId: chatId, mode: mode)
+        } catch {
+            Self.logger.error("Failed to save routing mode: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     // MARK: - Actions
 
+    /// Who answers the next message. Until the router exists (stage 3), Auto prefers the selected
+    /// cloud model and falls back to on-device when no provider is configured.
+    private var replyTarget: ReplyTarget? {
+        let cloud = selectedProvider.flatMap { provider in
+            selectedModel.isEmpty ? nil : ReplyTarget.cloud(provider, model: selectedModel)
+        }
+        switch chat?.routingMode ?? settings.routingMode {
+        case .onDevice:
+            return isOnDeviceUsable ? .onDevice : nil
+        case .cloud:
+            return cloud
+        case .auto:
+            return cloud ?? (isOnDeviceUsable ? .onDevice : nil)
+        }
+    }
+
+    private var isOnDeviceUsable: Bool {
+        settings.onDeviceEnabled && onDeviceStatus.isAvailable
+    }
+
+    private var routeLabel: String {
+        switch replyTarget {
+        case .onDevice: "On-device"
+        case .cloud(_, let model): model
+        case nil: ""
+        }
+    }
+
     private func sendCurrentMessage() {
-        guard let provider = selectedProvider, !selectedModel.isEmpty else {
+        guard let target = replyTarget else {
             showingModelPicker = true
             return
         }
@@ -196,8 +254,7 @@ public struct ChatView: View {
                 chatId: chatId,
                 content: prompt,
                 attachments: attachments,
-                provider: provider,
-                model: selectedModel,
+                target: target,
                 preset: selectedPreset
             )
             inputText = ""
@@ -208,7 +265,7 @@ public struct ChatView: View {
     }
 
     private func regenerate(from message: Message) {
-        guard let provider = selectedProvider, !selectedModel.isEmpty else {
+        guard let target = replyTarget else {
             showingModelPicker = true
             return
         }
@@ -216,8 +273,7 @@ public struct ChatView: View {
             try chatService.regenerate(
                 chatId: chatId,
                 fromMessageId: message.id,
-                provider: provider,
-                model: selectedModel,
+                target: target,
                 preset: selectedPreset
             )
         } catch {
@@ -228,32 +284,53 @@ public struct ChatView: View {
     // MARK: - Model Picker Sheet
     private var modelPickerSheet: some View {
         NavigationStack {
-            Group {
+            List {
+                Section {
+                    Button {
+                        selectOnDevice()
+                        showingModelPicker = false
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    } label: {
+                        HStack {
+                            Label("Apple Intelligence", systemImage: "iphone")
+                                .foregroundStyle(isOnDeviceUsable ? .primary : .secondary)
+                            Spacer()
+                            if chat?.routingMode == .onDevice {
+                                Image(systemName: "checkmark")
+                                    .foregroundStyle(Color.accentColor)
+                            }
+                        }
+                    }
+                    .disabled(!isOnDeviceUsable)
+                } header: {
+                    Text("On-device")
+                } footer: {
+                    Text(settings.onDeviceEnabled ? onDeviceStatus.detail : "The on-device model is turned off in Settings.")
+                }
+
                 if providers.isEmpty {
-                    ContentUnavailableView(
-                        "No Providers",
-                        systemImage: "server.rack",
-                        description: Text("Add a provider in Settings to start chatting.")
-                    )
-                } else {
-                    List {
-                        ForEach(providers) { provider in
-                            Section(header: Text(provider.name)) {
-                                ForEach(provider.models, id: \.self) { model in
-                                    Button {
-                                        selectModel(model, of: provider)
-                                        showingModelPicker = false
-                                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                    } label: {
-                                        HStack {
-                                            Text(model)
-                                                .foregroundStyle(.primary)
-                                            Spacer()
-                                            if selectedProviderId == provider.id && selectedModel == model {
-                                                Image(systemName: "checkmark")
-                                                    .foregroundStyle(Color.accentColor)
-                                            }
-                                        }
+                    Section("Cloud") {
+                        Text("Add a provider in Settings to use cloud models.")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                ForEach(providers) { provider in
+                    Section(header: Text(provider.name)) {
+                        ForEach(provider.models, id: \.self) { model in
+                            Button {
+                                selectModel(model, of: provider)
+                                setRoutingMode(.cloud)
+                                showingModelPicker = false
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            } label: {
+                                HStack {
+                                    Text(model)
+                                        .foregroundStyle(.primary)
+                                    Spacer()
+                                    if chat?.routingMode != .onDevice && selectedProviderId == provider.id && selectedModel == model {
+                                        Image(systemName: "checkmark")
+                                            .foregroundStyle(Color.accentColor)
                                     }
                                 }
                             }

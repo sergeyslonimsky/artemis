@@ -6,11 +6,20 @@ public struct ChatTurn: Sendable {
     public var messages: [Message]
     public var systemPrompt: String?
     public var preset: Preset?
+    /// `false` for utility requests (titles, classification): the backend uses `systemPrompt`
+    /// alone instead of wrapping it in the assistant persona.
+    public var usesAssistantPersona: Bool
 
-    public init(messages: [Message], systemPrompt: String? = nil, preset: Preset? = nil) {
+    public init(
+        messages: [Message],
+        systemPrompt: String? = nil,
+        preset: Preset? = nil,
+        usesAssistantPersona: Bool = true
+    ) {
         self.messages = messages
         self.systemPrompt = systemPrompt
         self.preset = preset
+        self.usesAssistantPersona = usesAssistantPersona
     }
 }
 

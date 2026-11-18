@@ -73,6 +73,15 @@ extension AppDatabase {
         }
     }
 
+    public func setChatRoutingMode(chatId: String, mode: RoutingMode?) throws {
+        try dbWriter.write { db in
+            try db.execute(
+                sql: "UPDATE chats SET routing_mode = ? WHERE id = ?",
+                arguments: [mode?.rawValue, chatId]
+            )
+        }
+    }
+
     public func deleteChat(id: String) throws {
         let attachmentIds = try dbWriter.write { db in
             let ids = try String.fetchAll(db, sql: """
