@@ -1,7 +1,7 @@
 import Foundation
 
 /// A source of device data the on-device model looked at.
-public enum PersonalDataSource: String, Codable, Sendable, CaseIterable {
+enum PersonalDataSource: String, Codable, Sendable, CaseIterable {
     case calendar
     case reminders
     case contacts
@@ -11,12 +11,12 @@ public enum PersonalDataSource: String, Codable, Sendable, CaseIterable {
 
     /// Private sources keep the reply on the device: it isn't escalated or shown to the cloud.
     /// Weather for a named place says nothing about the user (their location is its own source).
-    public var isPrivate: Bool {
+    var isPrivate: Bool {
         self != .weather
     }
 
     /// "Checked your calendar" — shown under the reply.
-    public var usedLabel: String {
+    var usedLabel: String {
         switch self {
         case .calendar: "Checked your calendar"
         case .reminders: "Checked your reminders"
@@ -28,7 +28,7 @@ public enum PersonalDataSource: String, Codable, Sendable, CaseIterable {
     }
 
     /// "Checking your calendar…" — shown while the tool runs.
-    public var activityLabel: String {
+    var activityLabel: String {
         switch self {
         case .calendar: "Checking your calendar…"
         case .reminders: "Checking your reminders…"
@@ -39,7 +39,7 @@ public enum PersonalDataSource: String, Codable, Sendable, CaseIterable {
         }
     }
 
-    public var systemImage: String {
+    var systemImage: String {
         switch self {
         case .calendar: "calendar"
         case .reminders: "checklist"
@@ -53,7 +53,7 @@ public enum PersonalDataSource: String, Codable, Sendable, CaseIterable {
 
 /// A set of on-device tools, switched on per turn by the request's category: the model's
 /// context is small, so it only sees the tools the request may need.
-public enum ToolGroup: String, Codable, Sendable, CaseIterable, Identifiable {
+enum ToolGroup: String, Codable, Sendable, CaseIterable, Identifiable {
     case schedule
     case contacts
     case alarms
@@ -61,9 +61,9 @@ public enum ToolGroup: String, Codable, Sendable, CaseIterable, Identifiable {
     case places
     case health
 
-    public var id: String { rawValue }
+    var id: String { rawValue }
 
-    public var title: String {
+    var title: String {
         switch self {
         case .schedule: "Calendar & Reminders"
         case .contacts: "Contacts"
@@ -74,7 +74,7 @@ public enum ToolGroup: String, Codable, Sendable, CaseIterable, Identifiable {
         }
     }
 
-    public var systemImage: String {
+    var systemImage: String {
         switch self {
         case .schedule: "calendar"
         case .contacts: "person.crop.circle"
@@ -85,7 +85,7 @@ public enum ToolGroup: String, Codable, Sendable, CaseIterable, Identifiable {
         }
     }
 
-    public var detail: String {
+    var detail: String {
         switch self {
         case .schedule: "Read your events and reminders, and draft new ones."
         case .contacts: "Look up people and draft calls, messages and emails."
@@ -98,8 +98,8 @@ public enum ToolGroup: String, Codable, Sendable, CaseIterable, Identifiable {
 }
 
 /// An action the model proposed. Nothing happens until the user confirms it.
-public struct ActionDraft: Identifiable, Codable, Equatable, Sendable {
-    public enum Kind: String, Codable, Sendable {
+struct ActionDraft: Identifiable, Codable, Equatable, Sendable {
+    enum Kind: String, Codable, Sendable {
         case event
         case reminder
         case alarm
@@ -109,29 +109,29 @@ public struct ActionDraft: Identifiable, Codable, Equatable, Sendable {
         case email
     }
 
-    public enum Status: String, Codable, Sendable {
+    enum Status: String, Codable, Sendable {
         case pending
         case added
         case dismissed
     }
 
-    public var id: String
-    public var kind: Kind
+    var id: String
+    var kind: Kind
     /// Event, reminder or alarm title; the contact's name for calls, messages and emails.
-    public var title: String
+    var title: String
     /// Event start, reminder due date or alarm time; unused for timers and contact actions.
-    public var date: Date
+    var date: Date
     /// `false` for all-day events and reminders without a time.
-    public var hasTime: Bool
+    var hasTime: Bool
     /// Event or timer length; ignored for other kinds.
-    public var durationMinutes: Int
+    var durationMinutes: Int
     /// Phone number or email address of a contact action.
-    public var address: String?
+    var address: String?
     /// Text of a message or email.
-    public var body: String?
-    public var status: Status
+    var body: String?
+    var status: Status
 
-    public init(
+    init(
         id: String = UUID().uuidString.lowercased(),
         kind: Kind,
         title: String,
@@ -155,17 +155,17 @@ public struct ActionDraft: Identifiable, Codable, Equatable, Sendable {
 }
 
 /// Extra facts about an assistant reply, stored as JSON in `messages.extras`.
-public struct MessageExtras: Codable, Equatable, Sendable {
-    public var personalDataUsed: [PersonalDataSource] = []
-    public var drafts: [ActionDraft] = []
+struct MessageExtras: Codable, Equatable, Sendable {
+    var personalDataUsed: [PersonalDataSource] = []
+    var drafts: [ActionDraft] = []
 
-    public init(personalDataUsed: [PersonalDataSource] = [], drafts: [ActionDraft] = []) {
+    init(personalDataUsed: [PersonalDataSource] = [], drafts: [ActionDraft] = []) {
         self.personalDataUsed = personalDataUsed
         self.drafts = drafts
     }
 
-    public var isEmpty: Bool { personalDataUsed.isEmpty && drafts.isEmpty }
+    var isEmpty: Bool { personalDataUsed.isEmpty && drafts.isEmpty }
 
     /// Whether the reply was built from data that must stay on the device.
-    public var usedPrivateData: Bool { personalDataUsed.contains(where: \.isPrivate) }
+    var usedPrivateData: Bool { personalDataUsed.contains(where: \.isPrivate) }
 }

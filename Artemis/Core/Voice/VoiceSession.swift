@@ -36,6 +36,8 @@ final class VoiceSession: Identifiable {
     private(set) var consent: Message?
     /// The reply's action waiting for a "yes" (or a tap).
     private(set) var pendingDraft: PendingDraft?
+    /// The composer for a confirmed message or email, shown over voice mode.
+    var draftSheet: DraftSheet?
     var isMuted = false {
         didSet { audio.isMuted = isMuted }
     }
@@ -79,7 +81,6 @@ final class VoiceSession: Identifiable {
     private static let endOfTurnSilence: TimeInterval = 1.2
     /// Above this the microphone hears speech, not room noise.
     private static let speechLevel: Float = 0.45
-    private static let localeKey = "voiceLocale"
     private static let logger = Logger(subsystem: "com.artemis.ios", category: "VoiceSession")
     /// The previous session's teardown; a new session waits for it, so two sessions never hold
     /// the microphone and the recognizer at once.
@@ -89,8 +90,7 @@ final class VoiceSession: Identifiable {
         self.chatId = chatId
         self.send = send
         self.answerConsent = answerConsent
-        let saved = UserDefaults.standard.string(forKey: Self.localeKey)
-        self.locale = saved.map(Locale.init(identifier:)) ?? Locale.current
+        self.locale = VoicePreferences.locale
     }
 
     // MARK: - Lifecycle
@@ -100,7 +100,7 @@ final class VoiceSession: Identifiable {
         UIApplication.shared.isIdleTimerDisabled = true
         await Self.teardown?.value
         guard await AVAudioApplication.requestRecordPermission() else {
-            state = .failed("Artemis needs the microphone. You can allow it in Settings › Apps › Artemis.")
+            state = .failed(VoicePreferences.microphoneDeniedMessage)
             return
         }
         await startRecognition()
@@ -109,25 +109,14 @@ final class VoiceSession: Identifiable {
     private func startRecognition() async {
         do {
             guard let supported = await SpeechTranscriber.supportedLocale(equivalentTo: locale) else {
-                state = .failed("Speech recognition doesn't support \(Self.name(of: locale)). Choose another language.")
+                state = .failed("Speech recognition doesn't support \(locale.displayName). Choose another language.")
                 return
             }
-            try await reserve(supported)
             let transcriber = SpeechTranscriber(locale: supported, preset: .progressiveTranscription)
-            if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
-                state = .preparing("Downloading speech model…")
-                VoiceLog.log("downloading speech model for \(supported.identifier)")
-                try await request.downloadAndInstall()
-            }
-            guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
-                state = .failed("Speech recognition isn't available on this device.")
-                return
-            }
-            let analyzer = SpeechAnalyzer(modules: [transcriber])
-            try await analyzer.prepareToAnalyze(in: format)
-            let input = try audio.start(analyzerFormat: format)
-            try await analyzer.start(inputSequence: input)
-            self.analyzer = analyzer
+            analyzer = try await SpeechPipeline.start(
+                transcriber, locale: supported, audio: audio, conversation: true,
+                onDownload: { state = .preparing("Downloading speech model…") }
+            )
             self.transcriber = transcriber
             audio.isMuted = isMuted
             cutoff = 0
@@ -161,19 +150,6 @@ final class VoiceSession: Identifiable {
         }
     }
 
-    /// Recognition needs its locale reserved; the system allows only a few at a time, so the
-    /// oldest other reservation makes room.
-    private func reserve(_ locale: Locale) async throws {
-        let reserved = await AssetInventory.reservedLocales
-        if reserved.contains(where: { $0.identifier(.bcp47) == locale.identifier(.bcp47) }) { return }
-        if reserved.count >= AssetInventory.maximumReservedLocales, let oldest = reserved.first {
-            await AssetInventory.release(reservedLocale: oldest)
-            VoiceLog.log("released speech locale \(oldest.identifier)")
-        }
-        try await AssetInventory.reserve(locale: locale)
-        VoiceLog.log("reserved speech locale \(locale.identifier)")
-    }
-
     /// Ends the session. A reply still being generated keeps going in the chat, silently.
     func stop() async {
         let previous = Self.teardown
@@ -200,7 +176,7 @@ final class VoiceSession: Identifiable {
 
     func setLocale(_ newLocale: Locale) async {
         guard newLocale.identifier != locale.identifier else { return }
-        UserDefaults.standard.set(newLocale.identifier, forKey: Self.localeKey)
+        VoicePreferences.locale = newLocale
         locale = newLocale
         await stopRecognition()
         resetUtterance()
@@ -346,13 +322,27 @@ final class VoiceSession: Identifiable {
         state = .speaking
         Task {
             do {
-                try await DraftPerformer.resolve(pending.draft, messageId: pending.messageId, confirm: confirm)
+                let outcome = try await DraftPerformer.resolve(pending.draft, messageId: pending.messageId, confirm: confirm)
+                if case .needsSheet(let sheet) = outcome {
+                    draftSheet = sheet
+                }
                 say(confirm ? DraftPerformer.confirmation(for: pending.draft) : "Okay, cancelled.")
                 VoiceLog.log("draft \(pending.draft.kind.rawValue) \(confirm ? "confirmed" : "dismissed") by voice")
             } catch {
                 say("Sorry, that didn't work. \(error.localizedDescription)")
                 VoiceLog.log("draft failed: \(error)")
             }
+        }
+    }
+
+    /// Records whether the user sent the message from the composer.
+    func finishDraftSheet(_ sheet: DraftSheet, completed: Bool) {
+        draftSheet = nil
+        do {
+            try DraftPerformer.finish(sheet, completed: completed)
+            if completed { say("Sent.") }
+        } catch {
+            say("Sorry, that didn't work. \(error.localizedDescription)")
         }
     }
 
@@ -467,13 +457,5 @@ final class VoiceSession: Identifiable {
             result.insert(current, at: 0)
         }
         return result
-    }
-
-    /// "English (United States)". Built from language and region only: the current locale's
-    /// identifier can carry extensions (e.g. `en_US@rg=plzzzz`) that don't localize.
-    static func name(of locale: Locale) -> String {
-        let code = locale.language.languageCode?.identifier ?? locale.identifier
-        let identifier = locale.language.region.map { "\(code)-\($0.identifier)" } ?? code
-        return Locale.current.localizedString(forIdentifier: identifier) ?? identifier
     }
 }

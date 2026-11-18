@@ -1,22 +1,28 @@
 import Foundation
 import GRDB
+import UniformTypeIdentifiers
 
-public enum AttachmentKind: String, Codable, Sendable {
+enum AttachmentKind: String, Codable, Sendable {
     case image
     case document
 }
 
-public struct Attachment: Identifiable, Codable, Equatable, Sendable {
-    public var id: String
-    public var messageId: String
-    public var filename: String
-    public var mime: String
-    public var kind: AttachmentKind
-    public var size: Int
-    public var createdAt: Date
-    public var data: Data?
+struct Attachment: Identifiable, Codable, Equatable, Sendable {
+    var id: String
+    var messageId: String
+    var filename: String
+    var mime: String
+    var kind: AttachmentKind
+    var size: Int
+    var createdAt: Date
+    /// Bytes for sending; stored in a file next to the database, not in the row.
+    var data: Data? = nil
 
-    public init(
+    enum CodingKeys: String, CodingKey {
+        case id, messageId, filename, mime, kind, size, createdAt
+    }
+
+    init(
         id: String = UUID().uuidString.lowercased(),
         messageId: String = "",
         filename: String,
@@ -35,42 +41,36 @@ public struct Attachment: Identifiable, Codable, Equatable, Sendable {
         self.createdAt = createdAt
         self.data = data
     }
+
+    var contentType: UTType {
+        UTType(mimeType: mime) ?? .data
+    }
+
+    /// Plain text, Markdown, JSON, XML, source code…: inlined into prompts as text, so every
+    /// model can read it.
+    var isTextDocument: Bool {
+        kind == .document && (contentType.conforms(to: .text) || contentType.conforms(to: .json))
+    }
+
+    /// The document's text, when it is a text document with its bytes loaded.
+    var text: String? {
+        guard isTextDocument, let data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    /// "Image" or "File", for notes that stand in for an attachment.
+    var kindLabel: String {
+        kind == .image ? "Image" : "File"
+    }
 }
 
 // MARK: - GRDB Records
-extension Attachment: FetchableRecord, PersistableRecord, TableRecord {
-    public static let databaseTableName = "attachments"
+extension Attachment: AppRecord {
+    static let databaseTableName = "attachments"
 
-    public enum Columns {
-        public static let id = Column(CodingKeys.id)
-        public static let messageId = Column("message_id")
-        public static let filename = Column(CodingKeys.filename)
-        public static let mime = Column(CodingKeys.mime)
-        public static let kind = Column(CodingKeys.kind)
-        public static let size = Column(CodingKeys.size)
-        public static let createdAt = Column("created_at")
-    }
-
-    public func encode(to container: inout PersistenceContainer) throws {
-        container[Columns.id] = id
-        container[Columns.messageId] = messageId
-        container[Columns.filename] = filename
-        container[Columns.mime] = mime
-        container[Columns.kind] = kind.rawValue
-        container[Columns.size] = size
-        container[Columns.createdAt] = Int64(createdAt.timeIntervalSince1970 * 1000)
-    }
-
-    public init(row: Row) throws {
-        id = row[Columns.id]
-        messageId = row[Columns.messageId]
-        filename = row[Columns.filename]
-        mime = row[Columns.mime]
-        let kindRaw: String = row[Columns.kind]
-        kind = AttachmentKind(rawValue: kindRaw) ?? .document
-        size = row[Columns.size]
-        let createdMillis: Int64 = row[Columns.createdAt]
-        createdAt = Date(timeIntervalSince1970: TimeInterval(createdMillis) / 1000.0)
-        data = nil
+    enum Columns {
+        static let id = Column("id")
+        static let messageId = Column("message_id")
+        static let createdAt = Column("created_at")
     }
 }

@@ -3,37 +3,32 @@ import GRDB
 
 extension AppDatabase {
     // MARK: - Chats
-    public func fetchChats() throws -> [Chat] {
-        try dbWriter.read { db in
-            try Chat.order(Chat.Columns.updatedAt.desc).fetchAll(db)
-        }
+
+    func fetchChats() throws -> [Chat] {
+        try dbWriter.read { db in try Self.chatsNewestFirst.fetchAll(db) }
     }
 
-    public func fetchChat(id: String) throws -> Chat? {
-        try dbWriter.read { db in
-            try Chat.fetchOne(db, id: id)
-        }
+    func fetchChat(id: String) throws -> Chat? {
+        try dbWriter.read { db in try Chat.fetchOne(db, id: id) }
     }
 
     /// Emits the chat list, newest first, every time it changes.
-    public func observeChats() -> AsyncValueObservation<[Chat]> {
-        ValueObservation
-            .tracking { db in try Chat.order(Chat.Columns.updatedAt.desc).fetchAll(db) }
-            .removeDuplicates()
-            .values(in: dbWriter)
+    func observeChats() -> AsyncValueObservation<[Chat]> {
+        observe { db in try Self.chatsNewestFirst.fetchAll(db) }
     }
 
     /// Emits the chat (or `nil` once deleted) every time it changes.
-    public func observeChat(id: String) -> AsyncValueObservation<Chat?> {
-        ValueObservation
-            .tracking { db in try Chat.fetchOne(db, id: id) }
-            .removeDuplicates()
-            .values(in: dbWriter)
+    func observeChat(id: String) -> AsyncValueObservation<Chat?> {
+        observe { db in try Chat.fetchOne(db, id: id) }
+    }
+
+    private static var chatsNewestFirst: QueryInterfaceRequest<Chat> {
+        Chat.order(Chat.Columns.updatedAt.desc)
     }
 
     /// - Parameter id: lets a draft chat keep the id the UI already uses for it.
     @discardableResult
-    public func createChat(
+    func createChat(
         id: String = UUID().uuidString.lowercased(),
         title: String,
         source: TitleSource = .placeholder,
@@ -52,76 +47,47 @@ extension AppDatabase {
             model: model,
             routingMode: routingMode
         )
-        try dbWriter.write { db in
-            try chat.insert(db)
-        }
+        try dbWriter.write { db in try chat.insert(db) }
         return chat
     }
 
-    public func setGeneratedTitle(chatId: String, title: String) throws -> Bool {
+    /// Sets a generated title unless the chat was titled since (by the user or another generation).
+    /// Returns whether the title was set.
+    @discardableResult
+    func setGeneratedTitle(chatId: String, title: String) throws -> Bool {
         try dbWriter.write { db in
-            // Authoritative check: only overwrite placeholder, matching Artemis Go logic!
-            try db.execute(
-                sql: "UPDATE chats SET title = ?, title_source = 'generated' WHERE id = ? AND title_source = 'placeholder'",
-                arguments: [title, chatId]
-            )
-            return db.changesCount > 0
+            try Chat
+                .filter(id: chatId)
+                .filter(Chat.Columns.titleSource == TitleSource.placeholder.rawValue)
+                .updateAll(db, Chat.Columns.title.set(to: title), Chat.Columns.titleSource.set(to: TitleSource.generated.rawValue)) > 0
         }
     }
 
-    public func renameChat(chatId: String, title: String) throws {
+    func renameChat(chatId: String, title: String) throws {
+        try updateChat(chatId, Chat.Columns.title.set(to: title), Chat.Columns.titleSource.set(to: TitleSource.manual.rawValue))
+    }
+
+    func setChatModel(chatId: String, providerId: String?, model: String?) throws {
+        try updateChat(chatId, Chat.Columns.providerId.set(to: providerId), Chat.Columns.model.set(to: model))
+    }
+
+    func setChatCloudAllowed(chatId: String, allowed: Bool) throws {
+        try updateChat(chatId, Chat.Columns.cloudAllowed.set(to: allowed))
+    }
+
+    func setChatRoutingMode(chatId: String, mode: RoutingMode?) throws {
+        try updateChat(chatId, Chat.Columns.routingMode.set(to: mode?.rawValue))
+    }
+
+    private func updateChat(_ chatId: String, _ assignments: ColumnAssignment...) throws {
         try dbWriter.write { db in
-            try db.execute(
-                sql: "UPDATE chats SET title = ?, title_source = 'manual' WHERE id = ?",
-                arguments: [title, chatId]
-            )
+            _ = try Chat.filter(id: chatId).updateAll(db, assignments)
         }
     }
 
-    public func setChatModel(chatId: String, providerId: String?, model: String?) throws {
-        try dbWriter.write { db in
-            try db.execute(
-                sql: "UPDATE chats SET provider_id = ?, model = ? WHERE id = ?",
-                arguments: [providerId, model, chatId]
-            )
-        }
-    }
-
-    public func setChatCloudAllowed(chatId: String, allowed: Bool) throws {
-        try dbWriter.write { db in
-            try db.execute(
-                sql: "UPDATE chats SET cloud_allowed = ? WHERE id = ?",
-                arguments: [allowed ? 1 : 0, chatId]
-            )
-        }
-    }
-
-    /// Unanswered cloud-consent prompts are dropped once the conversation moves on.
-    public func deletePendingConsents(chatId: String) throws {
-        try dbWriter.write { db in
-            try db.execute(
-                sql: "DELETE FROM messages WHERE chat_id = ? AND status = ?",
-                arguments: [chatId, MessageStatus.awaitingConsent.rawValue]
-            )
-        }
-    }
-
-    public func setChatRoutingMode(chatId: String, mode: RoutingMode?) throws {
-        try dbWriter.write { db in
-            try db.execute(
-                sql: "UPDATE chats SET routing_mode = ? WHERE id = ?",
-                arguments: [mode?.rawValue, chatId]
-            )
-        }
-    }
-
-    public func deleteChat(id: String) throws {
+    func deleteChat(id: String) throws {
         let attachmentIds = try dbWriter.write { db in
-            let ids = try String.fetchAll(db, sql: """
-                SELECT a.id FROM attachments a
-                  JOIN messages m ON m.id = a.message_id
-                 WHERE m.chat_id = ?
-                """, arguments: [id])
+            let ids = try Self.attachmentIds(db, of: Message.filter(Message.Columns.chatId == id))
             _ = try Chat.deleteOne(db, id: id)
             return ids
         }
@@ -129,9 +95,10 @@ extension AppDatabase {
     }
 
     // MARK: - Messages
+
     /// Messages of a chat in conversation order.
     /// - Parameter includeAttachmentData: load attachment bytes from disk (needed to build LLM requests).
-    public func fetchMessages(chatId: String, includeAttachmentData: Bool = false) throws -> [Message] {
+    func fetchMessages(chatId: String, includeAttachmentData: Bool = false) throws -> [Message] {
         var messages = try dbWriter.read { db in
             try Self.fetchMessages(db, chatId: chatId)
         }
@@ -146,11 +113,8 @@ extension AppDatabase {
     }
 
     /// Emits the chat's messages (without attachment bytes) every time they change.
-    public func observeMessages(chatId: String) -> AsyncValueObservation<[Message]> {
-        ValueObservation
-            .tracking { db in try Self.fetchMessages(db, chatId: chatId) }
-            .removeDuplicates()
-            .values(in: dbWriter)
+    func observeMessages(chatId: String) -> AsyncValueObservation<[Message]> {
+        observe { db in try Self.fetchMessages(db, chatId: chatId) }
     }
 
     private static func fetchMessages(_ db: Database, chatId: String) throws -> [Message] {
@@ -173,7 +137,7 @@ extension AppDatabase {
 
     /// Inserts the message at the end of its chat and returns it with the assigned `seq`.
     @discardableResult
-    public func addMessage(_ message: Message) throws -> Message {
+    func addMessage(_ message: Message) throws -> Message {
         // Files go to disk first so a committed row never points to a missing file.
         var written: [String] = []
         do {
@@ -186,19 +150,15 @@ extension AppDatabase {
 
             return try dbWriter.write { db in
                 var message = message
-                message.seq = try Int64.fetchOne(
-                    db,
-                    sql: "SELECT COALESCE(MAX(seq), 0) + 1 FROM messages WHERE chat_id = ?",
-                    arguments: [message.chatId]
-                ) ?? 1
+                let lastSeq = try Message
+                    .filter(Message.Columns.chatId == message.chatId)
+                    .select(max(Message.Columns.seq), as: Int64.self)
+                    .fetchOne(db)
+                message.seq = (lastSeq ?? 0) + 1
                 try message.insert(db)
 
-                // Touch chat updated_at
-                let nowMillis = Int64(message.createdAt.timeIntervalSince1970 * 1000)
-                try db.execute(
-                    sql: "UPDATE chats SET updated_at = ? WHERE id = ?",
-                    arguments: [nowMillis, message.chatId]
-                )
+                try Chat.filter(id: message.chatId)
+                    .updateAll(db, Chat.Columns.updatedAt.set(to: message.createdAt.databaseMilliseconds))
 
                 for i in message.attachments.indices {
                     message.attachments[i].messageId = message.id
@@ -212,7 +172,7 @@ extension AppDatabase {
         }
     }
 
-    public func finishMessage(
+    func finishMessage(
         id: String,
         content: String,
         reasoning: String,
@@ -221,76 +181,77 @@ extension AppDatabase {
         stats: MessageStats?,
         extras: MessageExtras = MessageExtras()
     ) throws {
-        let extrasJSON = extras.isEmpty ? nil : String(data: try JSONEncoder().encode(extras), encoding: .utf8)
+        let extrasJSON = try Message.databaseJSON(extras)
         try dbWriter.write { db in
-            try db.execute(
-                sql: """
-                UPDATE messages
-                SET content = ?, reasoning = ?, status = ?, error = ?, extras = ?,
-                    tokens = ?, tokens_estimated = ?, duration_ms = ?
-                WHERE id = ?
-                """,
-                arguments: [
-                    content,
-                    reasoning,
-                    status.rawValue,
-                    error,
-                    extrasJSON,
-                    stats?.tokens,
-                    stats.map { $0.isEstimated ? 1 : 0 },
-                    stats?.durationMs,
-                    id
-                ]
-            )
+            _ = try Message.filter(id: id).updateAll(db, [
+                Message.Columns.content.set(to: content),
+                Message.Columns.reasoning.set(to: reasoning),
+                Message.Columns.status.set(to: status.rawValue),
+                Message.Columns.error.set(to: error),
+                Message.Columns.extras.set(to: extrasJSON),
+                Message.Columns.tokens.set(to: stats?.tokens),
+                Message.Columns.tokensEstimated.set(to: stats?.isEstimated),
+                Message.Columns.durationMs.set(to: stats?.durationMs),
+            ])
         }
     }
 
-    public func setRouteReason(messageId: String, reason: RouteReason) throws {
+    func setRouteReason(messageId: String, reason: RouteReason) throws {
         try dbWriter.write { db in
-            try db.execute(
-                sql: "UPDATE messages SET route_reason = ? WHERE id = ?",
-                arguments: [reason.rawValue, messageId]
-            )
+            _ = try Message.filter(id: messageId).updateAll(db, Message.Columns.routeReason.set(to: reason.rawValue))
         }
     }
 
-    /// Marks a drafted event/reminder as added or dismissed.
-    public func setDraftStatus(messageId: String, draftId: String, status: ActionDraft.Status) throws {
+    /// Records whether the user confirmed or dismissed a drafted action.
+    func setDraftStatus(messageId: String, draftId: String, status: ActionDraft.Status) throws {
         try dbWriter.write { db in
-            guard var message = try Message.fetchOne(db, id: messageId) else { return }
-            guard let index = message.extras.drafts.firstIndex(where: { $0.id == draftId }) else { return }
+            guard var message = try Message.fetchOne(db, id: messageId),
+                  let index = message.extras.drafts.firstIndex(where: { $0.id == draftId }) else { return }
             message.extras.drafts[index].status = status
-            let json = String(data: try JSONEncoder().encode(message.extras), encoding: .utf8)
-            try db.execute(sql: "UPDATE messages SET extras = ? WHERE id = ?", arguments: [json, messageId])
+            _ = try Message.filter(id: messageId)
+                .updateAll(db, Message.Columns.extras.set(to: try Message.databaseJSON(message.extras)))
+        }
+    }
+
+    /// Unanswered cloud-consent prompts are dropped once the conversation moves on.
+    func deletePendingConsents(chatId: String) throws {
+        try dbWriter.write { db in
+            _ = try Message
+                .filter(Message.Columns.chatId == chatId)
+                .filter(Message.Columns.status == MessageStatus.awaitingConsent.rawValue)
+                .deleteAll(db)
         }
     }
 
     /// Deletes the message and everything after it in the same chat.
-    public func deleteMessagesFrom(chatId: String, messageId: String) throws {
-        let attachmentIds = try dbWriter.write { db in
-            let fromSeq = """
-                (SELECT seq FROM messages WHERE id = ? AND chat_id = ?)
-                """
-            let ids = try String.fetchAll(db, sql: """
-                SELECT a.id FROM attachments a
-                  JOIN messages m ON m.id = a.message_id
-                 WHERE m.chat_id = ? AND m.seq >= \(fromSeq)
-                """, arguments: [chatId, messageId, chatId])
-            try db.execute(
-                sql: "DELETE FROM messages WHERE chat_id = ? AND seq >= \(fromSeq)",
-                arguments: [chatId, messageId, chatId]
-            )
+    func deleteMessagesFrom(chatId: String, messageId: String) throws {
+        let attachmentIds = try dbWriter.write { db -> [String] in
+            guard let from = try Message.fetchOne(db, id: messageId), from.chatId == chatId else { return [] }
+            let doomed = Message
+                .filter(Message.Columns.chatId == chatId)
+                .filter(Message.Columns.seq >= from.seq)
+            let ids = try Self.attachmentIds(db, of: doomed)
+            _ = try doomed.deleteAll(db)
             return ids
         }
         removeAttachmentFiles(ids: attachmentIds)
     }
 
-    // MARK: - Attachment files
-    public func attachmentURL(id: String) -> URL {
-        attachmentsDirectory.appendingPathComponent(id)
+    private static func attachmentIds(_ db: Database, of messages: QueryInterfaceRequest<Message>) throws -> [String] {
+        let messageIds = try messages.select(Message.Columns.id, as: String.self).fetchAll(db)
+        return try Attachment
+            .filter(messageIds.contains(Attachment.Columns.messageId))
+            .select(Attachment.Columns.id, as: String.self)
+            .fetchAll(db)
     }
 
-    public func loadAttachmentData(id: String) -> Data? {
+    // MARK: - Attachment files
+
+    func attachmentURL(id: String) -> URL {
+        attachmentsDirectory.appending(path: id)
+    }
+
+    func loadAttachmentData(id: String) -> Data? {
         try? Data(contentsOf: attachmentURL(id: id))
     }
 
@@ -301,96 +262,90 @@ extension AppDatabase {
     }
 
     // MARK: - Providers
-    public func fetchProviders() throws -> [Provider] {
-        try dbWriter.read { db in
-            try Provider.order(Provider.Columns.createdAt.asc).fetchAll(db)
-        }
+
+    func fetchProviders() throws -> [Provider] {
+        try dbWriter.read { db in try Self.providersOldestFirst.fetchAll(db) }
+    }
+
+    func observeProviders() -> AsyncValueObservation<[Provider]> {
+        observe { db in try Self.providersOldestFirst.fetchAll(db) }
+    }
+
+    private static var providersOldestFirst: QueryInterfaceRequest<Provider> {
+        Provider.order(Provider.Columns.createdAt.asc)
     }
 
     /// Cloud models of the most recently active chats, newest first.
-    public func recentModels(limit: Int = 5) throws -> [ModelRef] {
+    func recentModels(limit: Int = 5) throws -> [ModelRef] {
         try dbWriter.read { db in
-            try Row.fetchAll(db, sql: """
-                SELECT provider_id, model FROM chats
-                WHERE provider_id IS NOT NULL AND model IS NOT NULL AND model != ''
-                GROUP BY provider_id, model
-                ORDER BY MAX(updated_at) DESC
-                LIMIT ?
-                """, arguments: [limit]
-            ).map { ModelRef(providerId: $0["provider_id"], model: $0["model"]) }
+            try Chat
+                .filter(Chat.Columns.providerId != nil && Chat.Columns.model != nil && Chat.Columns.model != "")
+                .select(Chat.Columns.providerId, Chat.Columns.model)
+                .group(Chat.Columns.providerId, Chat.Columns.model)
+                .order(max(Chat.Columns.updatedAt).desc)
+                .limit(limit)
+                .asRequest(of: Row.self)
+                .fetchAll(db)
+                .map { ModelRef(providerId: $0[Chat.Columns.providerId], model: $0[Chat.Columns.model]) }
         }
     }
 
-    public func observeSettings() -> AsyncValueObservation<AppSettings?> {
-        ValueObservation
-            .tracking { db in try AppSettings.fetchOne(db) }
-            .removeDuplicates()
-            .values(in: dbWriter)
-    }
-
-    public func observeProviders() -> AsyncValueObservation<[Provider]> {
-        ValueObservation
-            .tracking { db in try Provider.order(Provider.Columns.createdAt.asc).fetchAll(db) }
-            .removeDuplicates()
-            .values(in: dbWriter)
-    }
-
-    public func saveProvider(_ provider: Provider, apiKey: String) throws {
+    func saveProvider(_ provider: Provider, apiKey: String) throws {
         try apiKeys.setAPIKey(apiKey, for: provider.id)
-        try dbWriter.write { db in
-            try provider.save(db)
-        }
+        try dbWriter.write { db in try provider.save(db) }
     }
 
-    public func deleteProvider(id: String) throws {
-        try dbWriter.write { db in
-            _ = try Provider.deleteOne(db, id: id)
-        }
+    func deleteProvider(id: String) throws {
+        try dbWriter.write { db in _ = try Provider.deleteOne(db, id: id) }
         try apiKeys.deleteAPIKey(for: id)
     }
 
-    public func apiKey(providerId: String) -> String {
+    func apiKey(providerId: String) -> String {
         apiKeys.apiKey(for: providerId) ?? ""
     }
 
     // MARK: - Presets
-    public func fetchPresets() throws -> [Preset] {
-        try dbWriter.read { db in
-            try Preset.order(Preset.Columns.createdAt.asc).fetchAll(db)
-        }
+
+    func fetchPresets() throws -> [Preset] {
+        try dbWriter.read { db in try Self.presetsOldestFirst.fetchAll(db) }
     }
 
-    public func savePreset(_ preset: Preset) throws {
-        try dbWriter.write { db in
-            try preset.save(db)
-        }
+    func observePresets() -> AsyncValueObservation<[Preset]> {
+        observe { db in try Self.presetsOldestFirst.fetchAll(db) }
     }
 
-    public func deletePreset(id: String) throws {
-        try dbWriter.write { db in
-            _ = try Preset.deleteOne(db, id: id)
-        }
+    private static var presetsOldestFirst: QueryInterfaceRequest<Preset> {
+        Preset.order(Preset.Columns.createdAt.asc)
+    }
+
+    func savePreset(_ preset: Preset) throws {
+        try dbWriter.write { db in try preset.save(db) }
+    }
+
+    func deletePreset(id: String) throws {
+        try dbWriter.write { db in _ = try Preset.deleteOne(db, id: id) }
     }
 
     // MARK: - Settings
-    public func fetchSettings() throws -> AppSettings {
-        try dbWriter.read { db in
-            try AppSettings.fetchOne(db, id: 1) ?? AppSettings()
-        }
+
+    func fetchSettings() throws -> AppSettings {
+        try dbWriter.read { db in try AppSettings.fetchOne(db, id: 1) ?? AppSettings() }
     }
 
-    public func saveSettings(_ settings: AppSettings) throws {
-        try dbWriter.write { db in
-            try settings.save(db)
-        }
+    /// Emits the settings every time they change.
+    func observeSettings() -> AsyncValueObservation<AppSettings> {
+        observe { db in try AppSettings.fetchOne(db, id: 1) ?? AppSettings() }
+    }
+
+    func saveSettings(_ settings: AppSettings) throws {
+        try dbWriter.write { db in try settings.save(db) }
     }
 
     // MARK: - Search
-    public func search(query: String, limit: Int = 50) throws -> [SearchHit] {
+
+    func search(query: String, limit: Int = 50) throws -> [SearchHit] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !needle.isEmpty else { return [] }
-
-        let matchQuery = buildFTSQuery(needle)
 
         return try dbWriter.read { db in
             let sql = """
@@ -403,58 +358,57 @@ extension AppDatabase {
                  WHERE ?1 <> '' AND messages_fts MATCH ?1
                  GROUP BY m.chat_id
             )
-            SELECT c.id, c.title, c.title_source, c.created_at, c.updated_at, best.content
+            SELECT c.*, best.content AS matched_content
               FROM chats c
               LEFT JOIN best ON best.chat_id = c.id
              WHERE best.chat_id IS NOT NULL OR instr(lower(c.title), lower(?2)) > 0
              ORDER BY c.updated_at DESC
              LIMIT ?3
             """
-
-            let rows = try Row.fetchAll(db, sql: sql, arguments: [matchQuery, needle, limit])
-            return rows.map { row in
-                let id: String = row["id"]
-                let title: String = row["title"]
-                let sourceRaw: String = row["title_source"]
-                let createdMillis: Int64 = row["created_at"]
-                let updatedMillis: Int64 = row["updated_at"]
-                let content: String? = row["content"]
-
-                let chat = Chat(
-                    id: id,
-                    title: title,
-                    titleSource: TitleSource(rawValue: sourceRaw) ?? .placeholder,
-                    createdAt: Date(timeIntervalSince1970: TimeInterval(createdMillis) / 1000.0),
-                    updatedAt: Date(timeIntervalSince1970: TimeInterval(updatedMillis) / 1000.0)
-                )
-
-                let snippet = extractSnippet(from: content ?? "", query: needle)
-                return SearchHit(chat: chat, snippet: snippet)
+            return try Row.fetchAll(db, sql: sql, arguments: [Self.ftsQuery(needle), needle, limit]).map { row in
+                let content: String? = row["matched_content"]
+                return SearchHit(chat: try Chat(row: row), snippet: Self.snippet(from: content ?? "", query: needle))
             }
         }
     }
 
-    private func buildFTSQuery(_ raw: String) -> String {
-        let tokens = raw.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
-        guard !tokens.isEmpty else { return "" }
-        // Each word as prefix token: "term"*
-        return tokens.map { "\"\($0)\"*" }.joined(separator: " ")
+    /// Each word as a quoted prefix token: `"term"*`.
+    private static func ftsQuery(_ raw: String) -> String {
+        raw.components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .map { "\"\($0)\"*" }
+            .joined(separator: " ")
     }
 
-    private func extractSnippet(from text: String, query: String, maxLength: Int = 140) -> String {
-        guard !text.isEmpty else { return "" }
-        let singleLine = text.replacingOccurrences(of: "\n", with: " ")
-        if let range = singleLine.range(of: query, options: .caseInsensitive) {
-            let startDistance = singleLine.distance(from: singleLine.startIndex, to: range.lowerBound)
-            let prefixLength = max(0, startDistance - 30)
-            let prefixIndex = singleLine.index(singleLine.startIndex, offsetBy: prefixLength)
-            let snippetSubstring = singleLine[prefixIndex...]
-            if snippetSubstring.count > maxLength {
-                let endIdx = singleLine.index(prefixIndex, offsetBy: maxLength)
-                return (prefixLength > 0 ? "…" : "") + String(singleLine[prefixIndex..<endIdx]) + "…"
-            }
-            return (prefixLength > 0 ? "…" : "") + String(snippetSubstring)
+    /// A single-line excerpt around the first match, or the start of the text.
+    private static func snippet(from text: String, query: String, maxLength: Int = 140) -> String {
+        let line = text.replacing("\n", with: " ")
+        guard let match = line.range(of: query, options: .caseInsensitive) else {
+            return String(line.prefix(maxLength))
         }
-        return String(singleLine.prefix(maxLength))
+        let start = line.index(match.lowerBound, offsetBy: -30, limitedBy: line.startIndex) ?? line.startIndex
+        let excerpt = line[start...]
+        let prefix = start > line.startIndex ? "…" : ""
+        return excerpt.count > maxLength
+            ? prefix + excerpt.prefix(maxLength) + "…"
+            : prefix + excerpt
+    }
+
+    // MARK: - Observation
+
+    private func observe<Value: Equatable & Sendable>(
+        _ fetch: @escaping @Sendable (Database) throws -> Value
+    ) -> AsyncValueObservation<Value> {
+        ValueObservation
+            .tracking(fetch)
+            .removeDuplicates()
+            .values(in: dbWriter)
+    }
+}
+
+extension Date {
+    /// Unix milliseconds, the way dates are stored in the database.
+    var databaseMilliseconds: Int64 {
+        Int64(floor(timeIntervalSince1970 * 1000))
     }
 }

@@ -8,3 +8,8 @@ struct ArtemisApp: App {
         }
     }
 }
+
+extension EnvironmentValues {
+    /// The app's database; previews and tests can inject an in-memory one.
+    @Entry var database: AppDatabase = .shared
+}

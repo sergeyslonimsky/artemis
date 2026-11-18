@@ -1,53 +1,28 @@
 import SwiftUI
 import MarkdownUI
 
-/// The user's answer to a cloud-consent prompt.
-public enum ConsentChoice {
-    /// Send this turn and stop asking in this chat.
-    case allow
-    case answerOnDevice
-}
-
-public struct MessageBubbleView: View {
-    public let message: Message
+struct MessageBubbleView: View {
+    let message: Message
     /// Live text from `ChatService` while the reply is generated.
-    public var live: ChatRunState?
+    var live: ChatRunState? = nil
     /// Display name of `message.providerId`, if the provider still exists.
-    public var providerName: String?
-    public var onRegenerate: (() -> Void)?
+    var providerName: String? = nil
+    var onRegenerate: (() -> Void)? = nil
     /// Re-answer an on-device reply with the cloud model; `nil` hides the action.
-    public var onAskCloud: (() -> Void)?
-    public var onConsent: ((ConsentChoice) -> Void)?
+    var onAskCloud: (() -> Void)? = nil
+    var onConsent: ((ConsentChoice) -> Void)? = nil
     /// Whether the chat has a cloud model to escalate to.
-    public var cloudAvailable: Bool
+    var cloudAvailable = true
     /// Confirm (`true`) or dismiss a drafted event/reminder.
-    public var onDraft: ((ActionDraft, Bool) -> Void)?
+    var onDraft: ((ActionDraft, Bool) -> Void)? = nil
+    /// Opens a drafted event in the calendar's editor.
+    var onEditDraft: ((ActionDraft) -> Void)? = nil
 
     @State private var copied = false
     @State private var showingTextSelection = false
 
-    public init(
-        message: Message,
-        live: ChatRunState? = nil,
-        providerName: String? = nil,
-        onRegenerate: (() -> Void)? = nil,
-        onAskCloud: (() -> Void)? = nil,
-        onConsent: ((ConsentChoice) -> Void)? = nil,
-        cloudAvailable: Bool = true,
-        onDraft: ((ActionDraft, Bool) -> Void)? = nil
-    ) {
-        self.message = message
-        self.live = live
-        self.providerName = providerName
-        self.onRegenerate = onRegenerate
-        self.onAskCloud = onAskCloud
-        self.onConsent = onConsent
-        self.cloudAvailable = cloudAvailable
-        self.onDraft = onDraft
-    }
-
     private var cloudLabel: String {
-        [providerName, message.model].compactMap { $0 }.joined(separator: " · ").nonEmpty ?? "the cloud"
+        ModelName.label(provider: providerName, model: message.model) ?? "the cloud"
     }
 
     private var isStreaming: Bool {
@@ -62,7 +37,7 @@ public struct MessageBubbleView: View {
         message.status == .streaming ? (live?.reasoning ?? "") : message.reasoning
     }
 
-    public var body: some View {
+    var body: some View {
         Group {
             if message.role == .user {
                 userMessage
@@ -73,6 +48,7 @@ public struct MessageBubbleView: View {
             }
         }
         .padding(.horizontal, 16)
+        .sensoryFeedback(.impact(weight: .light), trigger: copied) { _, new in new }
         .sheet(isPresented: $showingTextSelection) {
             TextSelectionSheet(text: message.content)
         }
@@ -83,13 +59,14 @@ public struct MessageBubbleView: View {
     private var userMessage: some View {
         VStack(alignment: .trailing, spacing: 8) {
             if !message.attachments.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
+                ScrollView(.horizontal) {
                     HStack(spacing: 8) {
                         ForEach(message.attachments) { attachment in
                             AttachmentCardView(attachment: attachment)
                         }
                     }
                 }
+                .scrollIndicators(.hidden)
                 .defaultScrollAnchor(.trailing)
                 .scrollBounceBehavior(.basedOnSize)
             }
@@ -101,11 +78,8 @@ public struct MessageBubbleView: View {
                         .font(.body)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 11)
-                        .background(
-                            Color(uiColor: .secondarySystemBackground),
-                            in: RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        )
-                        .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 22, style: .continuous))
+                        .background(Color(uiColor: .secondarySystemBackground), in: .rect(cornerRadius: 22, style: .continuous))
+                        .contentShape(.contextMenuPreview, .rect(cornerRadius: 22, style: .continuous))
                         .contextMenu { textActions }
                 }
             }
@@ -128,11 +102,11 @@ public struct MessageBubbleView: View {
             if isStreaming && content.isEmpty, let activity = live?.activity {
                 Label(activity.activityLabel, systemImage: activity.systemImage)
                     .foregroundStyle(.secondary)
-                    .shimmer(active: true)
+                    .shimmer()
             } else if isStreaming && content.isEmpty && reasoning.isEmpty {
                 Text("Thinking…")
                     .foregroundStyle(.secondary)
-                    .shimmer(active: true)
+                    .shimmer()
             } else if !content.isEmpty {
                 Group {
                     if isStreaming {
@@ -144,14 +118,18 @@ public struct MessageBubbleView: View {
                 }
                 .padding(8)
                 .background(Color(uiColor: .systemBackground))
-                .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .contentShape(.contextMenuPreview, .rect(cornerRadius: 16, style: .continuous))
                 .contextMenu { if !isStreaming { textActions } }
                 .padding(-8)
             }
 
             if !isStreaming {
                 ForEach(message.extras.drafts) { draft in
-                    DraftCard(draft: draft) { confirm in onDraft?(draft, confirm) }
+                    DraftCard(
+                        draft: draft,
+                        onDecision: { confirm in onDraft?(draft, confirm) },
+                        onEdit: draft.kind == .event ? onEditDraft.map { edit in { edit(draft) } } : nil
+                    )
                 }
             }
 
@@ -199,20 +177,11 @@ public struct MessageBubbleView: View {
 
     @ViewBuilder
     private var textActions: some View {
-        Button {
-            copy()
-        } label: {
-            Label("Copy", systemImage: "doc.on.doc")
-        }
-        Button {
-            showingTextSelection = true
-        } label: {
-            Label("Select Text", systemImage: "selection.pin.in.out")
-        }
+        Button("Copy", systemImage: "doc.on.doc", action: copy)
+        Button("Select Text", systemImage: "selection.pin.in.out") { showingTextSelection = true }
+        ShareLink(item: message.content)
         if let onRegenerate, message.role == .assistant {
-            Button(action: onRegenerate) {
-                Label("Regenerate", systemImage: "arrow.clockwise")
-            }
+            Button("Regenerate", systemImage: "arrow.clockwise", action: onRegenerate)
         }
     }
 
@@ -254,7 +223,6 @@ public struct MessageBubbleView: View {
 
     private func copy() {
         UIPasteboard.general.string = message.content
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         withAnimation { copied = true }
         Task {
             try? await Task.sleep(for: .seconds(1.5))
@@ -293,9 +261,8 @@ public struct MessageBubbleView: View {
             .buttonBorderShape(.capsule)
             .controlSize(.regular)
         }
-        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .cardBackground()
     }
 
     private var errorBanner: some View {
@@ -308,54 +275,42 @@ public struct MessageBubbleView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(Color.orange.opacity(0.12), in: .rect(cornerRadius: 14, style: .continuous))
     }
 }
 
-/// A drafted event or reminder; nothing is saved until the user taps Add.
+/// A drafted action; nothing happens until the user confirms it.
 private struct DraftCard: View {
     let draft: ActionDraft
     let onDecision: (Bool) -> Void
+    /// Change the draft in a system editor before saving; `nil` when there is none.
+    var onEdit: (() -> Void)?
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            Image(systemName: icon)
-                .font(.title3)
-                .foregroundStyle(Color.accentColor)
-                .frame(width: 40, height: 40)
-                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(draft.title)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(2)
-                Text(detailText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if let body = draft.body, !body.isEmpty {
-                    Text("“\(body)”")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
-                }
-            }
+        HStack(spacing: 12) {
+            DraftSummary(draft: draft, showsBody: true)
 
             Spacer(minLength: 8)
 
             switch draft.status {
             case .pending:
                 VStack(spacing: 6) {
-                    Button(confirmTitle) { onDecision(true) }
+                    Button(draft.kind.confirmTitle) { onDecision(true) }
                         .buttonStyle(.borderedProminent)
-                    Button("Dismiss") { onDecision(false) }
-                        .font(.caption)
-                        .buttonStyle(.borderless)
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 10) {
+                        if let onEdit {
+                            Button("Edit", action: onEdit)
+                        }
+                        Button("Dismiss") { onDecision(false) }
+                    }
+                    .font(.caption)
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
                 }
                 .controlSize(.small)
                 .buttonBorderShape(.capsule)
             case .added:
-                Label(doneTitle, systemImage: "checkmark.circle.fill")
+                Label(draft.kind.doneTitle, systemImage: "checkmark.circle.fill")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.green)
             case .dismissed:
@@ -364,79 +319,7 @@ private struct DraftCard: View {
                     .foregroundStyle(.tertiary)
             }
         }
-        .padding(12)
-        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-    }
-
-    private var icon: String { DraftPresentation.icon(for: draft) }
-    private var confirmTitle: String { DraftPresentation.confirmTitle(for: draft) }
-    private var doneTitle: String { DraftPresentation.doneTitle(for: draft) }
-    private var detailText: String { DraftPresentation.detail(for: draft) }
-}
-
-/// How drafts read in the chat and in voice mode.
-enum DraftPresentation {
-    static func icon(for draft: ActionDraft) -> String {
-        switch draft.kind {
-        case .event: "calendar.badge.plus"
-        case .reminder: "checklist"
-        case .alarm: "alarm"
-        case .timer: "timer"
-        case .call: "phone"
-        case .message: "message"
-        case .email: "envelope"
-        }
-    }
-
-    static func confirmTitle(for draft: ActionDraft) -> String {
-        switch draft.kind {
-        case .event: "Add"
-        case .reminder: "Remind"
-        case .alarm, .timer: "Set"
-        case .call: "Call"
-        case .message, .email: "Write"
-        }
-    }
-
-    static func doneTitle(for draft: ActionDraft) -> String {
-        switch draft.kind {
-        case .event, .reminder: "Added"
-        case .alarm, .timer: "Set"
-        case .call: "Called"
-        case .message, .email: "Opened"
-        }
-    }
-
-    static func detail(for draft: ActionDraft) -> String {
-        switch draft.kind {
-        case .event, .reminder:
-            let kind = draft.kind == .event ? "Event" : "Reminder"
-            guard draft.hasTime else {
-                return "\(kind) · \(draft.date.formatted(.dateTime.weekday(.wide).day().month(.wide)))"
-            }
-            var text = "\(kind) · \(draft.date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).hour().minute()))"
-            if draft.kind == .event, draft.durationMinutes > 0 {
-                let end = draft.date.addingTimeInterval(TimeInterval(draft.durationMinutes * 60))
-                text += "–" + end.formatted(date: .omitted, time: .shortened)
-            }
-            return text
-        case .alarm:
-            let day = Calendar.current.isDateInToday(draft.date) ? "Today"
-                : Calendar.current.isDateInTomorrow(draft.date) ? "Tomorrow"
-                : draft.date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
-            let text = "Alarm · \(day), \(draft.date.formatted(date: .omitted, time: .shortened))"
-            // AlarmKit alarms ring like Clock alarms but aren't listed in the Clock app.
-            return draft.status == .added ? text + " · see Settings, not Clock" : text
-        case .timer:
-            let length = Duration.seconds(draft.durationMinutes * 60).formatted(.units(allowed: [.hours, .minutes], width: .wide))
-            return "Timer · \(length)"
-        case .call:
-            return "Call · \(draft.address ?? "")"
-        case .message:
-            return "Message · \(draft.address ?? "")"
-        case .email:
-            return "Email · \(draft.address ?? "")"
-        }
+        .cardBackground(cornerRadius: 16, padding: 12)
     }
 }
 
@@ -531,9 +414,9 @@ struct BackendBadge: View {
 
     private var statsText: String? {
         guard let stats else { return nil }
-        var text = "\(stats.isEstimated ? "≈" : "")\(stats.tokens) tokens"
+        var text = "\(stats.isEstimated ? "≈" : "")\(stats.tokens.formatted()) tokens"
         if let rate = stats.tokensPerSecond {
-            text += " · " + String(format: "%.1f tokens/s", rate)
+            text += " · \(rate.formatted(.number.precision(.fractionLength(1)))) tokens/s"
         }
         return text
     }
@@ -546,14 +429,14 @@ struct BackendBadge: View {
             .foregroundStyle(.secondary)
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
-            .background(Color.secondary.opacity(0.1), in: Capsule())
+            .background(Color.secondary.opacity(0.1), in: .capsule)
             .accessibilityLabel(kind == .onDevice ? "Answered on device" : "Answered by \(title)")
     }
 
     /// Model name without the vendor prefix (`openai/gpt-4o` → `gpt-4o`).
     private var shortTitle: String {
         guard kind == .cloud, let model else { return title }
-        return model.split(separator: "/").last.map(String.init) ?? model
+        return ModelName(model).title
     }
 
     private var title: String {
@@ -561,13 +444,9 @@ struct BackendBadge: View {
         case .onDevice:
             return "On-device"
         case .cloud:
-            return [providerName, model].compactMap { $0 }.joined(separator: " · ").nonEmpty ?? "Cloud"
+            return ModelName.label(provider: providerName, model: model) ?? "Cloud"
         }
     }
-}
-
-private extension String {
-    var nonEmpty: String? { isEmpty ? nil : self }
 }
 
 // MARK: - Streaming Markdown

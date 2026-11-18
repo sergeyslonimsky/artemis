@@ -1,207 +1,204 @@
 import SwiftUI
 
-// MARK: - Provider Edit Sheet
+/// Adds or edits a cloud provider: endpoint, API key and the models to offer.
 struct ProviderEditView: View {
     @Environment(\.dismiss) private var dismiss
 
-    @State private var kind: ProviderKind
-    @State private var name: String
-    @State private var baseUrl: String
-    @State private var onlyFreeModels: Bool
+    @State private var draft: Provider
     @State private var apiKey: String
-    @State private var models: [String]
-    @State private var modelCapabilities: [String: [String]]
-    @State private var defaultModel: String
-    @State private var isTesting: Bool = false
-    @State private var testError: String?
-    @State private var testSuccess: Bool = false
-    @State private var newModel: String = ""
+    @State private var newModel = ""
+    @State private var test = TestState.idle
+    /// Changing it starts a connection test; `.task(id:)` cancels it when the sheet closes.
+    @State private var testRequest: UUID?
 
-    let existingId: String?
-    let existingCreatedAt: Date?
+    private let isNew: Bool
     let onSave: (Provider, String) -> Void
 
+    private enum TestState: Equatable {
+        case idle
+        case testing
+        case succeeded
+        case failed(String)
+    }
+
     init(provider: Provider?, apiKey: String, onSave: @escaping (Provider, String) -> Void) {
-        self.existingId = provider?.id
-        self.existingCreatedAt = provider?.createdAt
         let kind = provider?.kind ?? .openRouter
-        self._kind = State(initialValue: kind)
-        self._name = State(initialValue: provider?.name ?? kind.displayName)
-        self._baseUrl = State(initialValue: provider?.baseUrl ?? kind.defaultBaseURL)
-        self._onlyFreeModels = State(initialValue: provider?.onlyFreeModels ?? false)
-        self._apiKey = State(initialValue: apiKey)
-        self._models = State(initialValue: provider?.models ?? [])
-        self._modelCapabilities = State(initialValue: provider?.modelCapabilities ?? [:])
-        self._defaultModel = State(initialValue: provider?.defaultModel ?? "")
+        isNew = provider == nil
+        _draft = State(initialValue: provider ?? Provider(name: kind.displayName, kind: kind, baseUrl: kind.defaultBaseURL))
+        _apiKey = State(initialValue: apiKey)
         self.onSave = onSave
     }
 
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    Picker("Provider", selection: $kind) {
-                        ForEach(selectableKinds, id: \.self) { kind in
-                            Text(kind.displayName).tag(kind)
-                        }
-                    }
-                    .onChange(of: kind) { previous, current in
-                        selectKind(current, replacing: previous)
-                    }
-                    TextField("Name", text: $name)
-                    TextField(kind == .custom ? "Base URL (…/v1)" : "Base URL", text: $baseUrl)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.URL)
-                    SecureField("API Key", text: $apiKey)
-                    if kind == .openRouter {
-                        Toggle("Only free models", isOn: $onlyFreeModels)
-                            .onChange(of: onlyFreeModels) { _, isOn in
-                                applyFreeFilter(isOn)
-                            }
-                    }
-                } header: {
-                    Text("Provider Info")
-                } footer: {
-                    if kind == .openRouter {
-                        Text("Only free models keeps models whose ID ends in “:free”. They're rate-limited and may log prompts.")
-                    } else if kind == .custom {
-                        Text("Any OpenAI-compatible endpoint with /chat/completions.")
-                    }
-                }
-
-                Section {
-                    Button {
-                        testAndFetchModels()
-                    } label: {
-                        HStack {
-                            Text(isTesting ? "Testing…" : "Test & Fetch Models")
-                            if isTesting {
-                                Spacer()
-                                ProgressView()
-                            }
-                        }
-                    }
-                    .disabled(isTesting || baseUrl.isEmpty)
-
-                    if let error = testError {
-                        Text(error)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    }
-
-                    if testSuccess {
-                        Text("Connected successfully! Found \(models.count) models.")
-                            .font(.caption)
-                            .foregroundStyle(.green)
-                    }
-                }
-
-                Section {
-                    if !models.isEmpty {
-                        Picker("Default Model", selection: $defaultModel) {
-                            ForEach(models, id: \.self) { model in
-                                Text(model).tag(model)
-                            }
-                        }
-                    }
-                    ForEach(models, id: \.self) { model in
-                        HStack {
-                            Text(model)
-                                .font(.callout)
-                            Spacer()
-                            if modelCapabilities[model]?.contains(Provider.toolsCapability) == true {
-                                Image(systemName: "globe")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .accessibilityLabel("Web search")
-                            }
-                        }
-                    }
-                    .onDelete { offsets in
-                        for model in offsets.map({ models[$0] }) {
-                            modelCapabilities.removeValue(forKey: model)
-                        }
-                        models.remove(atOffsets: offsets)
-                        if !models.contains(defaultModel) {
-                            defaultModel = models.first ?? ""
-                        }
-                    }
-                    HStack {
-                        TextField("Add model ID", text: $newModel)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .onSubmit(addModel)
-                        Button("Add", action: addModel)
-                            .disabled(newModel.trimmingCharacters(in: .whitespaces).isEmpty)
-                    }
-                } header: {
-                    Text("Models")
-                } footer: {
-                    Text(models.isEmpty
-                         ? "Add at least one model: tap Test & Fetch Models, or enter model IDs by hand if the provider can't list them."
-                         : "🌐 marks models that can search the web. Swipe to remove models you don't use.")
-                }
+                providerSection
+                testSection
+                modelsSection
             }
-            .navigationTitle(existingId == nil ? "Add Provider" : "Edit Provider")
+            .navigationTitle(isNew ? "Add Provider" : "Edit Provider")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        let provider = Provider(
-                            id: existingId ?? UUID().uuidString.lowercased(),
-                            name: name.isEmpty ? kind.displayName : name,
-                            kind: kind,
-                            baseUrl: baseUrl,
-                            models: models,
-                            defaultModel: defaultModel.isEmpty ? (models.first ?? "") : defaultModel,
-                            modelCapabilities: modelCapabilities.filter { models.contains($0.key) },
-                            onlyFreeModels: kind == .openRouter && onlyFreeModels,
-                            createdAt: existingCreatedAt ?? Date()
-                        )
-                        onSave(provider, apiKey)
-                        dismiss()
-                    }
-                    .disabled(!canSave)
+                    Button("Save", action: save)
+                        .disabled(!canSave)
+                }
+            }
+            .task(id: testRequest) {
+                guard testRequest != nil else { return }
+                await testAndFetchModels()
+            }
+            .sensoryFeedback(trigger: test) { _, new in
+                switch new {
+                case .succeeded: .success
+                case .failed: .error
+                default: nil
                 }
             }
         }
     }
 
+    // MARK: - Sections
+
+    private var providerSection: some View {
+        Section {
+            Picker("Provider", selection: $draft.kind) {
+                ForEach(selectableKinds, id: \.self) { kind in
+                    Text(kind.displayName).tag(kind)
+                }
+            }
+            .onChange(of: draft.kind) { previous, current in
+                selectKind(current, replacing: previous)
+            }
+            TextField("Name", text: $draft.name)
+            TextField(draft.kind == .custom ? "Base URL (…/v1)" : "Base URL", text: $draft.baseUrl)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.URL)
+            SecureField("API Key", text: $apiKey)
+            if draft.kind == .openRouter {
+                Toggle("Only free models", isOn: $draft.onlyFreeModels)
+                    .onChange(of: draft.onlyFreeModels) { _, isOn in
+                        applyFreeFilter(isOn)
+                    }
+            }
+        } header: {
+            Text("Provider Info")
+        } footer: {
+            switch draft.kind {
+            case .openRouter:
+                Text("Only free models keeps models whose ID ends in “:free”. They're rate-limited and may log prompts.")
+            case .custom:
+                Text("Any OpenAI-compatible endpoint with /chat/completions.")
+            default:
+                EmptyView()
+            }
+        }
+    }
+
+    private var testSection: some View {
+        Section {
+            Button {
+                testRequest = UUID()
+            } label: {
+                LabeledContent(test == .testing ? "Testing…" : "Test & Fetch Models") {
+                    if test == .testing { ProgressView() }
+                }
+            }
+            .disabled(test == .testing || draft.baseUrl.isEmpty)
+
+            switch test {
+            case .failed(let message):
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            case .succeeded:
+                Text("Connected successfully! Found \(draft.models.count) models.")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            case .idle, .testing:
+                EmptyView()
+            }
+        }
+    }
+
+    private var modelsSection: some View {
+        Section {
+            if !draft.models.isEmpty {
+                Picker("Default Model", selection: $draft.defaultModel) {
+                    ForEach(draft.models, id: \.self) { Text($0).tag($0) }
+                }
+            }
+            ForEach(draft.models, id: \.self) { model in
+                LabeledContent {
+                    if draft.supportsWebSearch(model: model) {
+                        Image(systemName: "globe")
+                            .font(.caption)
+                            .accessibilityLabel("Web search")
+                    }
+                } label: {
+                    Text(model).font(.callout)
+                }
+            }
+            .onDelete { offsets in
+                let removed = offsets.map { draft.models[$0] }
+                draft.models.remove(atOffsets: offsets)
+                removed.forEach { draft.modelCapabilities.removeValue(forKey: $0) }
+                keepDefaultModelValid()
+            }
+            HStack {
+                TextField("Add model ID", text: $newModel)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .onSubmit(addModel)
+                Button("Add", action: addModel)
+                    .disabled(newModel.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        } header: {
+            Text("Models")
+        } footer: {
+            if draft.models.isEmpty {
+                Text("Add at least one model: tap Test & Fetch Models, or enter model IDs by hand if the provider can't list them.")
+            } else {
+                Text("\(Image(systemName: "globe")) marks models that can search the web. Swipe to remove models you don't use.")
+            }
+        }
+    }
+
+    // MARK: - Editing
+
     /// The kinds to offer; an existing provider of another kind (e.g. Groq) keeps its own.
     private var selectableKinds: [ProviderKind] {
-        ProviderKind.selectable.contains(kind) ? ProviderKind.selectable : ProviderKind.selectable + [kind]
+        ProviderKind.selectable.contains(draft.kind) ? ProviderKind.selectable : ProviderKind.selectable + [draft.kind]
     }
 
     /// Fills in the new kind's name and endpoint unless the user changed them.
     private func selectKind(_ current: ProviderKind, replacing previous: ProviderKind) {
-        if name.isEmpty || name == previous.displayName {
-            name = current.displayName
+        guard current != previous else { return }
+        if draft.name.isEmpty || draft.name == previous.displayName {
+            draft.name = current.displayName
         }
-        if baseUrl.isEmpty || baseUrl == previous.defaultBaseURL {
-            baseUrl = current.defaultBaseURL
+        if draft.baseUrl.isEmpty || draft.baseUrl == previous.defaultBaseURL {
+            draft.baseUrl = current.defaultBaseURL
         }
         // Models of another service don't carry over.
-        if current != previous {
-            models = []
-            modelCapabilities = [:]
-            defaultModel = ""
-            testSuccess = false
-            testError = nil
-        }
+        draft.models = []
+        draft.modelCapabilities = [:]
+        draft.defaultModel = ""
+        test = .idle
     }
 
     /// Switching on narrows the list right away; switching off needs the full list again.
     private func applyFreeFilter(_ isOn: Bool) {
         if isOn {
-            models = models.filter(Self.isFree)
-            modelCapabilities = modelCapabilities.filter { Self.isFree($0.key) }
-            if !models.contains(defaultModel) { defaultModel = models.first ?? "" }
-        } else if !apiKey.isEmpty || testSuccess {
-            testAndFetchModels()
+            draft.models = draft.models.filter(Self.isFree)
+            draft.modelCapabilities = draft.modelCapabilities.filter { Self.isFree($0.key) }
+            keepDefaultModelValid()
+        } else if !apiKey.isEmpty || test == .succeeded {
+            testRequest = UUID()
         }
     }
 
@@ -209,53 +206,60 @@ struct ProviderEditView: View {
         model.hasSuffix(ProviderKind.freeModelSuffix)
     }
 
-    /// A provider is only usable with at least one model to pick.
-    private var canSave: Bool {
-        !name.isEmpty && !baseUrl.isEmpty && !models.isEmpty
+    private func keepDefaultModelValid() {
+        if !draft.models.contains(draft.defaultModel) {
+            draft.defaultModel = draft.models.first ?? ""
+        }
     }
 
     private func addModel() {
         let model = newModel.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !model.isEmpty else { return }
-        if !models.contains(model) {
-            models.append(model)
+        if !draft.models.contains(model) {
+            draft.models.append(model)
         }
-        if defaultModel.isEmpty {
-            defaultModel = model
+        if draft.defaultModel.isEmpty {
+            draft.defaultModel = model
         }
         newModel = ""
     }
 
-    private func testAndFetchModels() {
-        isTesting = true
-        testError = nil
-        testSuccess = false
+    /// A provider is only usable with at least one model to pick.
+    private var canSave: Bool {
+        !draft.baseUrl.isEmpty && !draft.models.isEmpty
+    }
 
-        let client = LLMClient(baseUrl: baseUrl, apiKey: apiKey)
-        Task {
-            do {
-                var fetched = try await client.fetchModels()
-                if kind == .openRouter && onlyFreeModels {
-                    fetched = fetched.filter { Self.isFree($0.id) }
-                }
-                await MainActor.run {
-                    let ids = fetched.map(\.id)
-                    self.models = ids
-                    self.modelCapabilities = Dictionary(uniqueKeysWithValues: fetched.map { ($0.id, $0.capabilities) })
-                    if let first = ids.first, defaultModel.isEmpty || !ids.contains(defaultModel) {
-                        self.defaultModel = first
-                    }
-                    self.testSuccess = true
-                    self.isTesting = false
-                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                }
-            } catch {
-                await MainActor.run {
-                    self.testError = error.localizedDescription
-                    self.isTesting = false
-                    UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
-                }
+    private func save() {
+        var provider = draft
+        if provider.name.trimmingCharacters(in: .whitespaces).isEmpty {
+            provider.name = provider.kind.displayName
+        }
+        if provider.defaultModel.isEmpty {
+            provider.defaultModel = provider.models.first ?? ""
+        }
+        provider.modelCapabilities = provider.modelCapabilities.filter { provider.models.contains($0.key) }
+        provider.onlyFreeModels = provider.kind == .openRouter && provider.onlyFreeModels
+        onSave(provider, apiKey)
+        dismiss()
+    }
+
+    private func testAndFetchModels() async {
+        test = .testing
+        do {
+            var fetched = try await LLMClient(baseUrl: draft.baseUrl, apiKey: apiKey).fetchModels()
+            if draft.kind == .openRouter && draft.onlyFreeModels {
+                fetched = fetched.filter { Self.isFree($0.id) }
             }
+            draft.models = fetched.map(\.id)
+            draft.modelCapabilities = Dictionary(fetched.map { ($0.id, $0.capabilities) }, uniquingKeysWith: { first, _ in first })
+            keepDefaultModelValid()
+            test = .succeeded
+        } catch {
+            if Task.isCancelled {
+                test = .idle
+                return
+            }
+            test = .failed(error.localizedDescription)
         }
     }
 }

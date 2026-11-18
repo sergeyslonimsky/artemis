@@ -1,12 +1,12 @@
 import Foundation
 import GRDB
 
-public final class AppDatabase: Sendable {
-    public let dbWriter: any DatabaseWriter
-    public let attachmentsDirectory: URL
-    public let apiKeys: any APIKeyStore
+final class AppDatabase: Sendable {
+    let dbWriter: any DatabaseWriter
+    let attachmentsDirectory: URL
+    let apiKeys: any APIKeyStore
 
-    public init(
+    init(
         _ dbWriter: any DatabaseWriter,
         attachmentsDirectory: URL? = nil,
         apiKeys: any APIKeyStore = KeychainAPIKeyStore()
@@ -22,13 +22,13 @@ public final class AppDatabase: Sendable {
         }
 
         try FileManager.default.createDirectory(at: self.attachmentsDirectory, withIntermediateDirectories: true)
-        try migrator.migrate(dbWriter)
+        try Self.migrator.migrate(dbWriter)
         try moveLegacyAPIKeysToKeychain()
         try markInterruptedStreamsFailed()
     }
 
     /// Shared standard on-disk database instance for the application.
-    public static let shared: AppDatabase = {
+    static let shared: AppDatabase = {
         do {
             let fileManager = FileManager.default
             let appSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -48,7 +48,7 @@ public final class AppDatabase: Sendable {
     }()
 
     /// In-memory database queue useful for SwiftUI Previews and Unit Tests.
-    public static func inMemory() -> AppDatabase {
+    static func inMemory() -> AppDatabase {
         do {
             var config = Configuration()
             config.qos = .userInitiated
@@ -61,12 +61,8 @@ public final class AppDatabase: Sendable {
     }
 
     // MARK: - Migrations
-    private var migrator: DatabaseMigrator {
+    static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
-
-        #if DEBUG
-        migrator.eraseDatabaseOnSchemaChange = false
-        #endif
 
         // Migration 1: chats & messages
         migrator.registerMigration("v1_chats_messages") { db in
@@ -278,6 +274,20 @@ public final class AppDatabase: Sendable {
             try db.execute(sql: "ALTER TABLE settings ADD COLUMN favorite_models TEXT NOT NULL DEFAULT '[]'")
         }
 
+        // Migration 15: switched-off tool groups as a JSON array, like the other list columns
+        migrator.registerMigration("v15_tool_groups_json") { db in
+            let rows = try Row.fetchAll(db, sql: "SELECT id, disabled_tool_groups FROM settings")
+            for row in rows {
+                let csv: String = row["disabled_tool_groups"]
+                let groups = csv.split(separator: ",").map(String.init).sorted()
+                let json = String(decoding: try JSONEncoder().encode(groups), as: UTF8.self)
+                try db.execute(
+                    sql: "UPDATE settings SET disabled_tool_groups = ? WHERE id = ?",
+                    arguments: [json, row["id"] as Int64]
+                )
+            }
+        }
+
         return migrator
     }
 
@@ -297,10 +307,10 @@ public final class AppDatabase: Sendable {
     /// A generation can't survive an app restart; anything still marked streaming was interrupted.
     private func markInterruptedStreamsFailed() throws {
         try dbWriter.write { db in
-            try db.execute(sql: """
-                UPDATE messages SET status = 'failed', error = 'The response was interrupted.'
-                 WHERE status = 'streaming'
-                """)
+            _ = try Message
+                .filter(Message.Columns.status == MessageStatus.streaming.rawValue)
+                .updateAll(db, Message.Columns.status.set(to: MessageStatus.failed.rawValue),
+                           Message.Columns.error.set(to: "The response was interrupted."))
         }
     }
 }

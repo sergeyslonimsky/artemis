@@ -1,62 +1,41 @@
 import Foundation
-import UniformTypeIdentifiers
 
-public struct LLMRequest: Sendable {
-    public var model: String
-    public var messages: [Message]
-    public var systemPrompt: String?
-    public var preset: Preset?
-    public var capabilities: ProviderCapabilities
+/// A `/chat/completions` request built from the chat history.
+struct LLMRequest: Sendable {
+    var model: String
+    var messages: [Message]
+    var systemPrompt: String?
+    var preset: Preset?
+    var capabilities: ProviderCapabilities = ProviderKind.custom.capabilities
     /// Asks the gateway to run its own web search/fetch tool loop (OpenRouter-style `plugins` marker).
-    public var webSearch: Bool
+    var webSearch = false
     /// `false` replaces attachments of earlier messages with text notes (fallback when a provider
     /// rejects them despite advertising support).
-    public var includesPastAttachments: Bool = true
+    var includesPastAttachments = true
 
-    public init(
-        model: String,
-        messages: [Message],
-        systemPrompt: String? = nil,
-        preset: Preset? = nil,
-        capabilities: ProviderCapabilities = ProviderKind.custom.capabilities,
-        webSearch: Bool = false
-    ) {
-        self.model = model
-        self.messages = messages
-        self.systemPrompt = systemPrompt
-        self.preset = preset
-        self.capabilities = capabilities
-        self.webSearch = webSearch
-    }
-
-    public func encodeToJSONData() throws -> Data {
+    func encodeToJSONData() throws -> Data {
         var wireMessages: [WireMessage] = []
-
-        let effectiveSystem = preset?.systemPrompt.isEmpty == false ? preset?.systemPrompt : systemPrompt
-        if let system = effectiveSystem, !system.isEmpty {
+        if let system = Preset.effectiveSystemPrompt(preset: preset, fallback: systemPrompt) {
             wireMessages.append(WireMessage(role: "system", content: .text(system)))
         }
 
         // Only the message being answered must carry its attachments; earlier ones the model
         // can't read become a note (the earlier reply about them is already in the history).
         let latestUserIndex = messages.lastIndex { $0.role == .user }
-        for (index, msg) in messages.enumerated() {
+        for (index, message) in messages.enumerated() {
             let content: WireContent
-            if msg.attachments.isEmpty {
-                content = .text(msg.content)
+            if message.attachments.isEmpty {
+                content = .text(message.content)
             } else {
-                var parts: [WireContentPart] = []
-                if !msg.content.isEmpty {
-                    parts.append(WireContentPart(type: "text", text: msg.content))
-                }
-                for att in msg.attachments {
-                    if let part = try wirePart(for: att, isCurrent: index == latestUserIndex) {
+                var parts: [WireContentPart] = message.content.isEmpty ? [] : [.text(message.content)]
+                for attachment in message.attachments {
+                    if let part = try wirePart(for: attachment, isCurrent: index == latestUserIndex) {
                         parts.append(part)
                     }
                 }
                 content = .parts(parts)
             }
-            wireMessages.append(WireMessage(role: msg.role.rawValue, content: content))
+            wireMessages.append(WireMessage(role: message.role.rawValue, content: content))
         }
 
         let wire = WireRequest(
@@ -70,8 +49,9 @@ public struct LLMRequest: Sendable {
             frequencyPenalty: preset?.frequencyPenalty,
             presencePenalty: preset?.presencePenalty
         )
-
-        return try JSONEncoder().encode(wire)
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        return try encoder.encode(wire)
     }
 
     /// Text documents are inlined (works everywhere); binary ones need `file` part support.
@@ -81,25 +61,19 @@ public struct LLMRequest: Sendable {
         if !isCurrent && !includesPastAttachments {
             return try unsupported(attachment, isCurrent: false, reason: "")
         }
-
         if attachment.kind == .image {
             guard capabilities.supportsImages else {
                 return try unsupported(attachment, isCurrent: isCurrent, reason: "\(model) doesn't accept images")
             }
-            return WireContentPart(type: "image_url", imageUrl: .init(url: Self.dataURL(attachment, data)))
+            return .image(url: Self.dataURL(attachment, data))
         }
-
-        if Self.isTextDocument(attachment), let text = String(data: data, encoding: .utf8) {
-            return WireContentPart(type: "text", text: "File: \(attachment.filename)\n```\n\(text)\n```")
+        if let text = attachment.text {
+            return .text("File: \(attachment.filename)\n```\n\(text)\n```")
         }
-
         guard capabilities.supportsFileParts else {
             return try unsupported(attachment, isCurrent: isCurrent, reason: "\(model) doesn't accept files like this")
         }
-        return WireContentPart(
-            type: "file",
-            file: .init(filename: attachment.filename, fileData: Self.dataURL(attachment, data))
-        )
+        return .file(filename: attachment.filename, data: Self.dataURL(attachment, data))
     }
 
     /// Fails for the message being answered; earlier attachments degrade to a text note.
@@ -107,24 +81,18 @@ public struct LLMRequest: Sendable {
         if isCurrent {
             throw LLMRequestError.unsupportedAttachment(attachment.filename, reason: reason)
         }
-        let kind = attachment.kind == .image ? "Image" : "File"
-        return WireContentPart(type: "text", text: "[\(kind): \(attachment.filename) — not available to this model]")
+        return .text("[\(attachment.kindLabel): \(attachment.filename) — not available to this model]")
     }
 
     private static func dataURL(_ attachment: Attachment, _ data: Data) -> String {
         "data:\(attachment.mime);base64,\(data.base64EncodedString())"
     }
-
-    private static func isTextDocument(_ attachment: Attachment) -> Bool {
-        guard let type = UTType(mimeType: attachment.mime) else { return false }
-        return type.conforms(to: .text) || type.conforms(to: .json) || type.conforms(to: .xml)
-    }
 }
 
-public enum LLMRequestError: LocalizedError {
+enum LLMRequestError: LocalizedError {
     case unsupportedAttachment(String, reason: String)
 
-    public var errorDescription: String? {
+    var errorDescription: String? {
         switch self {
         case .unsupportedAttachment(let filename, let reason):
             "Can't send \(filename): \(reason). Switch to On-device or a model that supports it."
@@ -132,7 +100,9 @@ public enum LLMRequestError: LocalizedError {
     }
 }
 
-// MARK: - Wire Types
+// MARK: - Wire types
+// Property names are encoded in snake_case (`streamOptions` → `stream_options`).
+
 private struct WireRequest: Encodable {
     let model: String
     let messages: [WireMessage]
@@ -144,23 +114,10 @@ private struct WireRequest: Encodable {
     let topP: Double?
     let frequencyPenalty: Double?
     let presencePenalty: Double?
-
-    enum CodingKeys: String, CodingKey {
-        case model, messages, stream
-        case streamOptions = "stream_options"
-        case plugins
-        case temperature
-        case topP = "top_p"
-        case frequencyPenalty = "frequency_penalty"
-        case presencePenalty = "presence_penalty"
-    }
 }
 
 private struct WireStreamOptions: Encodable {
     let includeUsage: Bool
-    enum CodingKeys: String, CodingKey {
-        case includeUsage = "include_usage"
-    }
 }
 
 private struct WirePlugin: Encodable {
@@ -170,50 +127,52 @@ private struct WirePlugin: Encodable {
 private struct WireMessage: Encodable {
     let role: String
     let content: WireContent
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(role, forKey: .role)
-        switch content {
-        case .text(let str):
-            try container.encode(str, forKey: .content)
-        case .parts(let parts):
-            try container.encode(parts, forKey: .content)
-        }
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case role, content
-    }
 }
 
+/// A plain string, or an array of typed parts for messages with attachments.
 private enum WireContent: Encodable {
     case text(String)
     case parts([WireContentPart])
-}
 
-private struct WireContentPart: Encodable {
-    let type: String
-    var text: String?
-    var imageUrl: WireImageURL?
-    var file: WireFilePart?
-
-    enum CodingKeys: String, CodingKey {
-        case type, text
-        case imageUrl = "image_url"
-        case file
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .text(let text): try container.encode(text)
+        case .parts(let parts): try container.encode(parts)
+        }
     }
 }
 
-private struct WireImageURL: Encodable {
-    let url: String
-}
+private struct WireContentPart: Encodable {
+    enum Kind: String, Encodable {
+        case text
+        case imageUrl = "image_url"
+        case file
+    }
 
-private struct WireFilePart: Encodable {
-    let filename: String
-    let fileData: String
-    enum CodingKeys: String, CodingKey {
-        case filename
-        case fileData = "file_data"
+    struct ImageURL: Encodable {
+        let url: String
+    }
+
+    struct File: Encodable {
+        let filename: String
+        let fileData: String
+    }
+
+    let type: Kind
+    var text: String?
+    var imageUrl: ImageURL?
+    var file: File?
+
+    static func text(_ text: String) -> Self {
+        WireContentPart(type: .text, text: text)
+    }
+
+    static func image(url: String) -> Self {
+        WireContentPart(type: .imageUrl, imageUrl: ImageURL(url: url))
+    }
+
+    static func file(filename: String, data: String) -> Self {
+        WireContentPart(type: .file, file: File(filename: filename, fileData: data))
     }
 }

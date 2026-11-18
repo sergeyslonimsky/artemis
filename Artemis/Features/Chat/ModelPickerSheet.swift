@@ -1,47 +1,40 @@
 import SwiftUI
+import UIKit
 
 /// Mode and cloud model for a chat: search across providers, favorites and recent models first.
 struct ModelPickerSheet: View {
-    let providers: [Provider]
-    let mode: RoutingMode
-    let modeDescription: String
-    let selection: ModelRef?
-    let favorites: [ModelRef]
-    let recents: [ModelRef]
-    let presets: [Preset]
-    let presetId: String?
-    let onSelectPreset: (Preset?) -> Void
-    let onModeChange: (RoutingMode) -> Void
-    let onSelect: (Provider, String) -> Void
-    let onToggleFavorite: (ModelRef) -> Void
-    let onDone: () -> Void
+    let session: ChatSessionModel
 
     @State private var query = ""
+    @Environment(\.dismiss) private var dismiss
+
+    private var providers: [Provider] { session.providers }
+    private var favorites: [ModelRef] { session.settings.favoriteModels }
 
     var body: some View {
         NavigationStack {
             List {
                 if query.isEmpty {
                     Section {
-                        Picker("Mode", selection: Binding(get: { mode }, set: onModeChange)) {
-                            Text("Auto").tag(RoutingMode.auto)
-                            Text("On-device").tag(RoutingMode.onDevice)
-                            Text("Cloud").tag(RoutingMode.cloud)
+                        Picker("Mode", selection: Binding(get: { session.effectiveMode }, set: session.setRoutingMode)) {
+                            ForEach(RoutingMode.allCases, id: \.self) { mode in
+                                Text(mode.title).tag(mode)
+                            }
                         }
                         .pickerStyle(.segmented)
                         .listRowBackground(Color.clear)
                     } footer: {
-                        Text(modeDescription)
+                        Text(session.modeDescription)
                     }
 
-                    if !presets.isEmpty {
+                    if !session.presets.isEmpty {
                         Section {
                             Picker("Preset", selection: Binding(
-                                get: { presetId },
-                                set: { id in onSelectPreset(presets.first { $0.id == id }) }
+                                get: { session.selectedPreset?.id },
+                                set: { id in session.selectPreset(session.presets.first { $0.id == id }) }
                             )) {
                                 Text("None").tag(String?.none)
-                                ForEach(presets) { preset in
+                                ForEach(session.presets) { preset in
                                     Text(preset.title).tag(Optional(preset.id))
                                 }
                             }
@@ -56,7 +49,7 @@ struct ModelPickerSheet: View {
                     }
                 } else if query.isEmpty {
                     shortcutSection("Favorites", refs: favorites)
-                    shortcutSection("Recent", refs: recents.filter { !favorites.contains($0) })
+                    shortcutSection("Recent", refs: session.recentModels.filter { !favorites.contains($0) })
                     ForEach(providers) { provider in
                         Section(provider.name) {
                             ForEach(provider.models, id: \.self) { model in
@@ -85,10 +78,13 @@ struct ModelPickerSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done", action: onDone)
+                    Button("Done") { dismiss() }
                 }
             }
         }
+        .sensoryFeedback(.impact(weight: .light), trigger: session.selection)
+        .sensoryFeedback(.selection, trigger: favorites)
+        .onAppear(perform: session.refreshPickerData)
     }
 
     // MARK: - Sections
@@ -126,11 +122,11 @@ struct ModelPickerSheet: View {
     private func row(provider: Provider, model: String, showsProvider: Bool = false) -> some View {
         let ref = ModelRef(providerId: provider.id, model: model)
         let isFavorite = favorites.contains(ref)
-        let isSelected = selection == ref
+        let isSelected = session.selection == ref
         let name = ModelName(model)
 
         return Button {
-            onSelect(provider, model)
+            session.selectModel(model, of: provider)
         } label: {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -157,7 +153,7 @@ struct ModelPickerSheet: View {
         }
         .swipeActions(edge: .leading, allowsFullSwipe: true) {
             Button {
-                onToggleFavorite(ref)
+                session.toggleFavorite(ref)
             } label: {
                 Label(isFavorite ? "Unfavorite" : "Favorite", systemImage: isFavorite ? "star.slash" : "star")
             }
@@ -165,7 +161,7 @@ struct ModelPickerSheet: View {
         }
         .contextMenu {
             Button {
-                onToggleFavorite(ref)
+                session.toggleFavorite(ref)
             } label: {
                 Label(isFavorite ? "Remove from Favorites" : "Add to Favorites", systemImage: isFavorite ? "star.slash" : "star")
             }
@@ -207,25 +203,5 @@ struct ModelPickerSheet: View {
             }
         }
         .font(.caption)
-    }
-}
-
-/// "anthropic/claude-sonnet-4.5:free" → title "claude-sonnet-4.5", vendor "anthropic", free.
-private struct ModelName {
-    let title: String
-    let vendor: String?
-    let isFree: Bool
-
-    init(_ id: String) {
-        var rest = id
-        isFree = rest.hasSuffix(ProviderKind.freeModelSuffix)
-        if isFree { rest.removeLast(ProviderKind.freeModelSuffix.count) }
-        if let slash = rest.lastIndex(of: "/") {
-            vendor = String(rest[..<slash])
-            title = String(rest[rest.index(after: slash)...])
-        } else {
-            vendor = nil
-            title = rest
-        }
     }
 }

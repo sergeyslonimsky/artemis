@@ -46,7 +46,7 @@ struct ReplyJobTests {
 
     @Test func providerErrorMarksTheReplyFailed() async throws {
         let (database, chatId, replyId) = try setUp()
-        let backend = FakeBackend(kind: .cloud, events: [.error("Rate limited")])
+        let backend = FakeBackend(kind: .cloud, events: [], failure: LLMError.provider("Rate limited"))
         let outcome = await ReplyJob(database: database, chatId: chatId, messageId: replyId, backend: backend, preset: nil)
             .run(onBatch: { _ in })
 

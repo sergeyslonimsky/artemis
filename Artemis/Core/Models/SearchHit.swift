@@ -1,11 +1,11 @@
 import Foundation
 
-public struct SearchHit: Identifiable, Equatable, Sendable {
-    public var id: String { chat.id }
-    public var chat: Chat
-    public var snippet: String
+struct SearchHit: Identifiable, Equatable, Sendable {
+    var id: String { chat.id }
+    var chat: Chat
+    var snippet: String
 
-    public init(chat: Chat, snippet: String = "") {
+    init(chat: Chat, snippet: String = "") {
         self.chat = chat
         self.snippet = snippet
     }

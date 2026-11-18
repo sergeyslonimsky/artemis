@@ -1,13 +1,13 @@
 import Foundation
 
-public actor AutoTitlingService {
+actor AutoTitlingService {
     private let database: AppDatabase
 
-    public init(database: AppDatabase = .shared) {
+    init(database: AppDatabase = .shared) {
         self.database = database
     }
 
-    public func generateTitleIfNeeded(
+    func generateTitleIfNeeded(
         chatId: String,
         userPrompt: String,
         assistantReply: String,

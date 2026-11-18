@@ -1,6 +1,9 @@
+import GRDB
 import SwiftUI
+import os
 
-/// Settings, providers and presets shared by the settings pages. Every change is saved at once.
+/// Settings, providers and presets shared by the settings pages. Mirrors the database while
+/// `observe()` runs; every change is saved at once.
 @MainActor
 @Observable
 final class SettingsModel {
@@ -9,25 +12,76 @@ final class SettingsModel {
     private(set) var presets: [Preset] = []
     var errorMessage: String?
 
-    @ObservationIgnored private let database = AppDatabase.shared
+    @ObservationIgnored private let database: AppDatabase
+    private static let logger = Logger(subsystem: "com.artemis.ios", category: "Settings")
 
-    func load() {
+    init(database: AppDatabase = .shared) {
+        self.database = database
+        // The first frame shows real values instead of defaults; observation keeps them current.
         settings = (try? database.fetchSettings()) ?? AppSettings()
         providers = (try? database.fetchProviders()) ?? []
         presets = (try? database.fetchPresets()) ?? []
     }
 
+    // MARK: - Observation
+
+    func observeSettings() async {
+        await observe(database.observeSettings()) { settings = $0 }
+    }
+
+    func observeProviders() async {
+        await observe(database.observeProviders()) { providers = $0 }
+    }
+
+    func observePresets() async {
+        await observe(database.observePresets()) { presets = $0 }
+    }
+
+    private func observe<Value>(_ values: AsyncValueObservation<Value>, _ apply: (Value) -> Void) async {
+        do {
+            for try await value in values { apply(value) }
+        } catch {
+            Self.logger.error("Settings observation failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    // MARK: - Settings
+
+    /// Applies `change` and saves it; on failure the shown value stays as it was.
     func update(_ change: (inout AppSettings) -> Void) {
         var updated = settings
         change(&updated)
-        perform { try database.saveSettings(updated) }
-        settings = updated
+        guard updated != settings else { return }
+        perform {
+            try database.saveSettings(updated)
+            settings = updated
+        }
     }
 
     func binding<Value>(_ keyPath: WritableKeyPath<AppSettings, Value>) -> Binding<Value> {
         Binding(
             get: { self.settings[keyPath: keyPath] },
             set: { value in self.update { $0[keyPath: keyPath] = value } }
+        )
+    }
+
+    /// On when `member` is in the set at `keyPath`; `inverted` for sets of switched-off items.
+    func binding<Member: Hashable>(
+        _ member: Member,
+        in keyPath: WritableKeyPath<AppSettings, Set<Member>>,
+        inverted: Bool = false
+    ) -> Binding<Bool> {
+        Binding(
+            get: { self.settings[keyPath: keyPath].contains(member) != inverted },
+            set: { isOn in
+                self.update { settings in
+                    if isOn != inverted {
+                        settings[keyPath: keyPath].insert(member)
+                    } else {
+                        settings[keyPath: keyPath].remove(member)
+                    }
+                }
+            }
         )
     }
 
@@ -40,9 +94,12 @@ final class SettingsModel {
 
     func saveProvider(_ provider: Provider, apiKey: String) {
         let isFirst = providers.isEmpty
-        perform { try database.saveProvider(provider, apiKey: apiKey) }
+        perform {
+            var provider = provider
+            provider.updatedAt = Date()
+            try database.saveProvider(provider, apiKey: apiKey)
+        }
         if isFirst { update { $0.defaultProviderId = provider.id } }
-        load()
     }
 
     func deleteProvider(_ provider: Provider) {
@@ -50,12 +107,10 @@ final class SettingsModel {
         if settings.defaultProviderId == provider.id {
             update { $0.defaultProviderId = providers.first { $0.id != provider.id }?.id }
         }
-        load()
     }
 
     func makeDefault(_ provider: Provider) {
         update { $0.defaultProviderId = provider.id }
-        UISelectionFeedbackGenerator().selectionChanged()
     }
 
     func apiKey(for provider: Provider) -> String {
@@ -72,7 +127,6 @@ final class SettingsModel {
         var preset = preset
         preset.updatedAt = Date()
         perform { try database.savePreset(preset) }
-        load()
     }
 
     func deletePreset(_ preset: Preset) {
@@ -80,12 +134,10 @@ final class SettingsModel {
         if settings.defaultPresetId == preset.id {
             update { $0.defaultPresetId = nil }
         }
-        load()
     }
 
     func setDefaultPreset(_ preset: Preset?) {
         update { $0.defaultPresetId = preset?.id }
-        UISelectionFeedbackGenerator().selectionChanged()
     }
 
     private func perform(_ action: () throws -> Void) {

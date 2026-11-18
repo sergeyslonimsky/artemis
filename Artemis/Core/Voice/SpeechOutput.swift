@@ -1,5 +1,6 @@
 @preconcurrency import AVFoundation
 import NaturalLanguage
+import Synchronization
 
 /// Reads replies aloud sentence by sentence, so speech starts while the reply is still streaming.
 @MainActor
@@ -171,28 +172,31 @@ enum SpeakableText {
 }
 
 /// Resumes a synthesis continuation exactly once, from whichever thread gets there first.
-private final class SynthesisCompletion: @unchecked Sendable {
-    private let lock = NSLock()
-    private var continuation: CheckedContinuation<Void, Never>?
-    private var finished = false
+private final class SynthesisCompletion: Sendable {
+    private struct State {
+        var continuation: CheckedContinuation<Void, Never>?
+        var finished = false
+    }
 
-    var isFinished: Bool { lock.withLock { finished } }
+    private let state = Mutex(State())
+
+    var isFinished: Bool { state.withLock { $0.finished } }
 
     func set(_ continuation: CheckedContinuation<Void, Never>) {
-        let resumeNow = lock.withLock {
-            if finished { return true }
-            self.continuation = continuation
+        let resumeNow = state.withLock { state in
+            if state.finished { return true }
+            state.continuation = continuation
             return false
         }
         if resumeNow { continuation.resume() }
     }
 
     func finish() {
-        let continuation = lock.withLock { () -> CheckedContinuation<Void, Never>? in
-            guard !finished else { return nil }
-            finished = true
-            defer { self.continuation = nil }
-            return self.continuation
+        let continuation = state.withLock { state -> CheckedContinuation<Void, Never>? in
+            guard !state.finished else { return nil }
+            state.finished = true
+            defer { state.continuation = nil }
+            return state.continuation
         }
         continuation?.resume()
     }

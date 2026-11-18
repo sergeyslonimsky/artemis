@@ -3,29 +3,29 @@ import Foundation
 
 /// Calendar and Reminders through EventKit. Reads feed the on-device model's tools; writes happen
 /// only when the user confirms a draft.
-public actor PersonalDataStore {
-    public static let shared = PersonalDataStore()
+actor PersonalDataStore {
+    static let shared = PersonalDataStore()
 
-    public struct EventSummary: Sendable {
-        public var title: String
-        public var start: Date
-        public var end: Date
-        public var isAllDay: Bool
-        public var calendar: String
-        public var location: String?
+    struct EventSummary: Sendable {
+        var title: String
+        var start: Date
+        var end: Date
+        var isAllDay: Bool
+        var calendar: String
+        var location: String?
     }
 
-    public struct ReminderSummary: Sendable {
-        public var title: String
-        public var due: Date?
-        public var dueHasTime: Bool
-        public var list: String
+    struct ReminderSummary: Sendable {
+        var title: String
+        var due: Date?
+        var dueHasTime: Bool
+        var list: String
     }
 
-    public enum StoreError: LocalizedError {
+    enum StoreError: LocalizedError {
         case accessDenied(PersonalDataSource)
 
-        public var errorDescription: String? {
+        var errorDescription: String? {
             switch self {
             case .accessDenied(.calendar):
                 "Artemis doesn't have access to your calendar. You can allow it in Settings › Privacy & Security › Calendars."
@@ -40,7 +40,7 @@ public actor PersonalDataStore {
     // MARK: - Access
 
     /// Asks for full access the first time; afterwards reports the current state.
-    public func requestAccess(to source: PersonalDataSource) async -> Bool {
+    func requestAccess(to source: PersonalDataSource) async -> Bool {
         let entityType: EKEntityType = source == .calendar ? .event : .reminder
         switch EKEventStore.authorizationStatus(for: entityType) {
         case .fullAccess:
@@ -60,7 +60,7 @@ public actor PersonalDataStore {
 
     // MARK: - Reads
 
-    public func events(from start: Date, days: Int) async throws -> [EventSummary] {
+    func events(from start: Date, days: Int) async throws -> [EventSummary] {
         guard await requestAccess(to: .calendar) else { throw StoreError.accessDenied(.calendar) }
         let end = Calendar.current.date(byAdding: .day, value: days, to: start) ?? start
         let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)
@@ -79,7 +79,7 @@ public actor PersonalDataStore {
     }
 
     /// Open reminders; `dueWithin` limits them to those due in the next N days (overdue included).
-    public func openReminders(dueWithin days: Int?) async throws -> [ReminderSummary] {
+    func openReminders(dueWithin days: Int?) async throws -> [ReminderSummary] {
         guard await requestAccess(to: .reminders) else { throw StoreError.accessDenied(.reminders) }
         let end = days.flatMap { Calendar.current.date(byAdding: .day, value: $0, to: Calendar.current.startOfDay(for: Date())) }
         let predicate = store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: end, calendars: nil)
@@ -101,7 +101,7 @@ public actor PersonalDataStore {
 
     // MARK: - Writes (user-confirmed drafts only)
 
-    public func save(_ draft: ActionDraft) async throws {
+    func save(_ draft: ActionDraft) async throws {
         switch draft.kind {
         case .event:
             guard await requestAccess(to: .calendar) else { throw StoreError.accessDenied(.calendar) }

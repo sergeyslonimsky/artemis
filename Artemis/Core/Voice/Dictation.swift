@@ -38,30 +38,21 @@ final class Dictation {
         volatile = ""
         state = .preparing
         guard await AVAudioApplication.requestRecordPermission() else {
-            state = .failed("Artemis needs the microphone. You can allow it in Settings › Apps › Artemis.")
+            state = .failed(VoicePreferences.microphoneDeniedMessage)
             return
         }
 
-        let preferred = UserDefaults.standard.string(forKey: "voiceLocale").map(Locale.init(identifier:)) ?? Locale.current
+        let preferred = VoicePreferences.locale
         do {
             guard let locale = await DictationTranscriber.supportedLocale(equivalentTo: preferred) else {
-                state = .failed("Dictation doesn't support \(VoiceSession.name(of: preferred)).")
+                state = .failed("Dictation doesn't support \(preferred.displayName).")
                 return
             }
             let transcriber = DictationTranscriber(locale: locale, preset: .progressiveLongDictation)
-            if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
-                try await request.downloadAndInstall()
-            }
-            guard state == .preparing else { return } // stopped while downloading
-            guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
-                state = .failed("Dictation isn't available on this device.")
-                return
-            }
-            let analyzer = SpeechAnalyzer(modules: [transcriber])
-            try await analyzer.prepareToAnalyze(in: format)
-            let input = try audio.start(analyzerFormat: format, conversation: false)
-            try await analyzer.start(inputSequence: input)
-            self.analyzer = analyzer
+            analyzer = try await SpeechPipeline.start(
+                transcriber, locale: locale, audio: audio, conversation: false,
+                shouldContinue: { state == .preparing } // stopped while downloading
+            )
 
             tasks.append(Task { [weak self] in
                 do {
@@ -80,6 +71,8 @@ final class Dictation {
             })
             state = .listening
             VoiceLog.log("dictation started: \(locale.identifier)")
+        } catch is CancellationError {
+            await teardown()
         } catch {
             VoiceLog.log("dictation start failed: \(error)")
             state = .failed(error.localizedDescription)

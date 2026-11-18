@@ -1,194 +1,143 @@
 import Foundation
 
 /// A model as listed by `/models`.
-public struct ModelInfo: Equatable, Sendable {
-    public var id: String
-    public var capabilities: [String]
+struct ModelInfo: Equatable, Sendable {
+    var id: String
+    var capabilities: [String]
 }
 
-public final class LLMClient: Sendable {
-    public let baseUrl: String
-    public let apiKey: String
+/// Talks to an OpenAI-compatible endpoint: lists models and streams chat completions.
+final class LLMClient: Sendable {
+    let apiKey: String
+    private let completionsURL: URL?
+    private let modelsURL: URL?
     private let session: URLSession
 
-    public init(baseUrl: String, apiKey: String, session: URLSession = .shared) {
-        self.baseUrl = baseUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    /// - Parameter baseUrl: the API root (`…/v1`); a full `…/chat/completions` URL is accepted too.
+    init(baseUrl: String, apiKey: String, session: URLSession = .shared) {
+        var root = baseUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/").union(.whitespacesAndNewlines))
+        if root.hasSuffix("/chat/completions") {
+            root.removeLast("/chat/completions".count)
+        }
+        let rootURL = URL(string: root).flatMap { $0.scheme == nil ? nil : $0 }
+        self.completionsURL = rootURL?.appending(path: "chat/completions")
+        self.modelsURL = rootURL?.appending(path: "models")
         self.apiKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         self.session = session
     }
 
-    private var completionsURL: URL? {
-        if baseUrl.hasSuffix("/chat/completions") {
-            return URL(string: baseUrl)
-        }
-        return URL(string: "\(baseUrl)/chat/completions")
-    }
+    // MARK: - Models
 
-    private var modelsURL: URL? {
-        var root = baseUrl
-        if root.hasSuffix("/chat/completions") {
-            root = String(root.dropLast("/chat/completions".count))
-        }
-        return URL(string: "\(root)/models")
-    }
-
-    // MARK: - Fetch Models
-    public func fetchModels() async throws -> [ModelInfo] {
-        guard let url = modelsURL else {
-            throw URLError(.badURL)
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        if !apiKey.isEmpty {
-            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        }
-
-        let (data, response) = try await session.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
-            let message = String(data: data, encoding: .utf8) ?? "Failed to fetch models"
-            throw NSError(domain: "LLMClient", code: (response as? HTTPURLResponse)?.statusCode ?? 500, userInfo: [NSLocalizedDescriptionKey: message])
-        }
+    func fetchModels() async throws -> [ModelInfo] {
+        guard let modelsURL else { throw LLMError.invalidURL }
+        let (data, response) = try await session.data(for: request(url: modelsURL))
+        try Self.validate(response, body: { String(decoding: data, as: UTF8.self) })
 
         struct ModelsResponse: Decodable {
-            struct ModelItem: Decodable {
+            struct Item: Decodable {
                 let id: String
                 /// Gateway extension, e.g. `["tools", "image_input"]`; absent on most providers.
                 let capabilities: [String]?
             }
-            let data: [ModelItem]
+            let data: [Item]
         }
 
-        let decoded = try JSONDecoder().decode(ModelsResponse.self, from: data)
-        return decoded.data
+        return try JSONDecoder().decode(ModelsResponse.self, from: data).data
             .map { ModelInfo(id: $0.id, capabilities: $0.capabilities ?? []) }
             .sorted { $0.id < $1.id }
     }
 
     // MARK: - Streaming
-    public func stream(request: LLMRequest) -> AsyncThrowingStream<LLMEvent, Error> {
-        AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    guard let url = self.completionsURL else {
-                        throw URLError(.badURL)
-                    }
 
-                    var urlRequest = URLRequest(url: url)
-                    urlRequest.httpMethod = "POST"
-                    urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                    if !self.apiKey.isEmpty {
-                        urlRequest.setValue("Bearer \(self.apiKey)", forHTTPHeaderField: "Authorization")
-                    }
-                    urlRequest.httpBody = try request.encodeToJSONData()
+    /// Server-sent events of `/chat/completions`, ending with `.done`. Failures are thrown as `LLMError`.
+    func stream(request llmRequest: LLMRequest) -> AsyncThrowingStream<LLMEvent, Error> {
+        .task { [self] continuation in
+            guard let completionsURL else { throw LLMError.invalidURL }
+            var urlRequest = request(url: completionsURL)
+            urlRequest.httpMethod = "POST"
+            urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            urlRequest.httpBody = try llmRequest.encodeToJSONData()
 
-                    let (bytes, response) = try await self.session.bytes(for: urlRequest)
+            let (bytes, response) = try await session.bytes(for: urlRequest)
+            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                var body = ""
+                for try await line in bytes.lines { body += line }
+                try Self.validate(response, body: { body })
+            }
 
-                    guard let httpResponse = response as? HTTPURLResponse else {
-                        throw URLError(.badServerResponse)
-                    }
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            var firstTokenTime: Date?
+            var completionTokens: Int?
+            var characters = 0
 
-                    if !(200...299).contains(httpResponse.statusCode) {
-                        var errorBody = ""
-                        for try await line in bytes.lines {
-                            errorBody += line
-                        }
-                        continuation.yield(.error(Self.errorMessage(from: errorBody, status: httpResponse.statusCode)))
-                        continuation.finish()
-                        return
-                    }
+            for try await line in bytes.lines {
+                try Task.checkCancellation()
+                guard let payload = Self.ssePayload(line) else { continue }
+                if payload == "[DONE]" { break }
+                guard let chunk = try? decoder.decode(WireChunk.self, from: Data(payload.utf8)) else { continue }
 
-                    var firstTokenTime: Date?
-                    var totalTokens = 0
-                    var tokenEstimated = true
-                    var accumulatedText = ""
+                if let error = chunk.error {
+                    throw LLMError.provider(error.message ?? "The provider reported an error.")
+                }
+                if let usage = chunk.usage {
+                    completionTokens = usage.completionTokens
+                }
+                guard let delta = chunk.choices?.first?.delta else { continue }
+                firstTokenTime = firstTokenTime ?? Date()
 
-                    for try await line in bytes.lines {
-                        if Task.isCancelled { break }
-
-                        let trimmed = line.trimmingCharacters(in: .whitespaces)
-                        guard trimmed.hasPrefix("data:") else { continue }
-
-                        let payload = trimmed.dropFirst(5).trimmingCharacters(in: .whitespaces)
-                        if payload == "[DONE]" {
-                            break
-                        }
-
-                        guard let data = payload.data(using: .utf8) else { continue }
-                        guard let chunk = try? JSONDecoder().decode(WireChunk.self, from: data) else { continue }
-
-                        // Some providers (e.g. OpenRouter) report failures mid-stream with HTTP 200
-                        if let error = chunk.error {
-                            continuation.yield(.error(error.message ?? "The provider reported an error."))
-                            continuation.finish()
-                            return
-                        }
-
-                        // Extract usage if available
-                        if let usage = chunk.usage {
-                            totalTokens = usage.completionTokens
-                            tokenEstimated = false
-                        }
-
-                        guard let choice = chunk.choices?.first else { continue }
-
-                        // Timing starts from the first fragment (content or reasoning)
-                        if firstTokenTime == nil {
-                            firstTokenTime = Date()
-                        }
-
-                        // Reasoning delta (DeepSeek / OpenRouter)
-                        let reasoning = choice.delta.reasoning ?? choice.delta.reasoningContent
-                        if let reasoning = reasoning, !reasoning.isEmpty {
-                            continuation.yield(.reasoning(reasoning))
-                        }
-
-                        // Content delta
-                        if let content = choice.delta.content, !content.isEmpty {
-                            accumulatedText += content
-                            continuation.yield(.content(content))
-                        }
-                    }
-
-                    let startTime = firstTokenTime ?? Date()
-                    let durationMs = max(1, Int(Date().timeIntervalSince(startTime) * 1000))
-
-                    if tokenEstimated {
-                        // Character-based fallback: ~4 chars per token
-                        totalTokens = max(1, accumulatedText.count / 4)
-                    }
-
-                    continuation.yield(.done(
-                        tokens: totalTokens,
-                        isEstimated: tokenEstimated,
-                        durationMs: durationMs
-                    ))
-                    continuation.finish()
-                } catch {
-                    if !Task.isCancelled {
-                        continuation.finish(throwing: error)
-                    } else {
-                        continuation.finish()
-                    }
+                // Reasoning: OpenRouter sends `reasoning`, DeepSeek `reasoning_content`.
+                if let reasoning = delta.reasoning ?? delta.reasoningContent, !reasoning.isEmpty {
+                    continuation.yield(.reasoning(reasoning))
+                }
+                if let content = delta.content, !content.isEmpty {
+                    characters += content.count
+                    continuation.yield(.content(content))
                 }
             }
+            try Task.checkCancellation()
 
-            continuation.onTermination = { @Sendable _ in
-                task.cancel()
-            }
+            let durationMs = max(1, Int(Date().timeIntervalSince(firstTokenTime ?? Date()) * 1000))
+            continuation.yield(.done(
+                tokens: completionTokens ?? TokenEstimate.tokens(forCharacters: characters),
+                isEstimated: completionTokens == nil,
+                durationMs: durationMs
+            ))
         }
     }
-}
 
-extension LLMClient {
+    // MARK: - Helpers
+
+    private func request(url: URL) -> URLRequest {
+        var request = URLRequest(url: url)
+        if !apiKey.isEmpty {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
+        return request
+    }
+
+    /// Throws `LLMError.http` for a non-2xx response; the body is only read when needed.
+    private static func validate(_ response: URLResponse, body: () -> String) throws {
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard (200...299).contains(http.statusCode) else {
+            throw LLMError.http(status: http.statusCode, message: errorMessage(from: body(), status: http.statusCode))
+        }
+    }
+
+    /// The payload of an SSE `data:` line; `nil` for comments, keep-alives and other fields.
+    private static func ssePayload(_ line: String) -> String? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("data:") else { return nil }
+        return trimmed.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)
+    }
+
     /// The `error.message` of an OpenAI-style error body, or the raw body / status as a fallback.
     static func errorMessage(from body: String, status: Int) -> String {
         struct ErrorBody: Decodable {
             struct Detail: Decodable { let message: String? }
             let error: Detail?
         }
-        if let data = body.data(using: .utf8),
-           let message = (try? JSONDecoder().decode(ErrorBody.self, from: data))?.error?.message,
+        if let message = (try? JSONDecoder().decode(ErrorBody.self, from: Data(body.utf8)))?.error?.message,
            !message.isEmpty {
             return "\(message) (HTTP \(status))"
         }
@@ -196,31 +145,28 @@ extension LLMClient {
     }
 }
 
-// MARK: - Chunk Decodables
+/// Rough token counts for when a backend doesn't report usage.
+enum TokenEstimate {
+    /// About four characters per token for typical English text.
+    static func tokens(forCharacters count: Int) -> Int {
+        max(1, count / 4)
+    }
+}
+
+// MARK: - Wire types
+
 private struct WireChunk: Decodable {
     struct Choice: Decodable {
         struct Delta: Decodable {
             let content: String?
             let reasoning: String?
             let reasoningContent: String?
-
-            enum CodingKeys: String, CodingKey {
-                case content, reasoning
-                case reasoningContent = "reasoning_content"
-            }
         }
         let delta: Delta
     }
 
-    /// Only the completion count is used; some providers omit the prompt count.
     struct Usage: Decodable {
-        let promptTokens: Int?
         let completionTokens: Int
-
-        enum CodingKeys: String, CodingKey {
-            case promptTokens = "prompt_tokens"
-            case completionTokens = "completion_tokens"
-        }
     }
 
     struct WireError: Decodable {

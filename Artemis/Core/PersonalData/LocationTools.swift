@@ -45,7 +45,7 @@ actor LocationProvider {
         return location
     }
 
-    /// "Warsaw, Poland" or a street address for a coordinate.
+    /// "Paris, France" or a street address for a coordinate.
     @MainActor
     static func describe(_ location: CLLocation, detailed: Bool = false) async -> String? {
         guard let request = MKReverseGeocodingRequest(location: location),
@@ -78,7 +78,7 @@ struct WeatherTool: Tool {
 
     @Generable
     struct Arguments {
-        @Guide(description: "City or place, e.g. \"Warsaw\"; empty for the user's current location")
+        @Guide(description: "City or place, e.g. \"Paris\"; empty for the user's current location")
         var place: String
         @Guide(description: "Days of forecast to include, from 1 to 10")
         var days: Int

@@ -1,38 +1,26 @@
 import SwiftUI
 
-public struct ShimmerModifier: ViewModifier {
-    @State private var phase: CGFloat = -1
-
-    public func body(content: Content) -> some View {
+/// A highlight sweeping across the content, for text that is still being worked on.
+struct ShimmerModifier: ViewModifier {
+    func body(content: Content) -> some View {
         content
-            .overlay(
+            .overlay {
                 GeometryReader { geometry in
-                    LinearGradient(
-                        gradient: Gradient(colors: [
-                            .clear,
-                            Color.white.opacity(0.4),
-                            .clear
-                        ]),
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                    .frame(width: geometry.size.width * 1.5)
-                    .offset(x: phase * geometry.size.width * 1.5)
-                }
-            )
-            .mask(content)
-            .onAppear {
-                withAnimation(
-                    .linear(duration: 1.5)
-                    .repeatForever(autoreverses: false)
-                ) {
-                    phase = 1
+                    let width = geometry.size.width * 1.5
+                    LinearGradient(colors: [.clear, .white.opacity(0.4), .clear], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: width)
+                        .keyframeAnimator(initialValue: -1.0, repeating: true) { gradient, phase in
+                            gradient.offset(x: phase * width)
+                        } keyframes: { _ in
+                            LinearKeyframe(1.0, duration: 1.5)
+                        }
                 }
             }
+            .mask(content)
     }
 }
 
-public extension View {
+extension View {
     @ViewBuilder
     func shimmer(active: Bool = true) -> some View {
         if active {

@@ -5,22 +5,22 @@ import UniformTypeIdentifiers
 import os
 
 /// What the router knows about a turn.
-public struct RouteContext: Sendable {
+struct RouteContext: Sendable {
     /// The user message being answered (attachment bytes not required).
-    public var message: Message
+    var message: Message
     /// A couple of preceding messages, so follow-ups ("and in Paris?") classify correctly.
-    public var recentHistory: [Message]
-    public var mode: RoutingMode
-    public var onDeviceUsable: Bool
-    public var hasCloud: Bool
+    var recentHistory: [Message]
+    var mode: RoutingMode
+    var onDeviceUsable: Bool
+    var hasCloud: Bool
     /// A non-text file the on-device model can't read (filled in by `Router`).
-    public var hasUnsupportedAttachment: Bool
+    var hasUnsupportedAttachment: Bool
     /// What the chat's cloud model accepts; `nil` when there's no cloud model.
-    public var cloudCapabilities: ProviderCapabilities?
+    var cloudCapabilities: ProviderCapabilities?
     /// On-device tools switched on in the settings.
-    public var availableTools: Set<ToolGroup>
+    var availableTools: Set<ToolGroup>
 
-    public init(
+    init(
         message: Message,
         recentHistory: [Message],
         mode: RoutingMode,
@@ -43,11 +43,11 @@ public struct RouteContext: Sendable {
 
 /// Picks the backend for a turn: explicit modes win, then cheap deterministic rules,
 /// then an on-device classifier for everything the rules can't decide.
-public struct Router: Sendable {
-    public init() {}
+struct Router: Sendable {
+    init() {}
 
     @concurrent
-    public func route(_ context: RouteContext) async -> RouteDecision {
+    func route(_ context: RouteContext) async -> RouteDecision {
         var context = context
         context.hasUnsupportedAttachment = await hasUnsupportedAttachment(context.message)
         let rules = RoutingRules(
@@ -96,17 +96,17 @@ public struct Router: Sendable {
 ///
 /// Languages outside `supportsLocale` go to the cloud: the model may answer them, but noticeably
 /// worse (Apple doesn't support e.g. Russian or Polish on-device).
-public struct RoutingRules: Sendable {
+struct RoutingRules: Sendable {
     /// Whether the on-device model officially supports a language.
-    public var supportsLanguage: @Sendable (Locale.LanguageCode) -> Bool
-    public var onDeviceContextSize: Int
+    var supportsLanguage: @Sendable (Locale.LanguageCode) -> Bool
+    var onDeviceContextSize: Int
 
-    public init(supportsLanguage: @escaping @Sendable (Locale.LanguageCode) -> Bool, onDeviceContextSize: Int) {
+    init(supportsLanguage: @escaping @Sendable (Locale.LanguageCode) -> Bool, onDeviceContextSize: Int) {
         self.supportsLanguage = supportsLanguage
         self.onDeviceContextSize = onDeviceContextSize
     }
 
-    public func evaluate(_ context: RouteContext) -> RouteDecision? {
+    func evaluate(_ context: RouteContext) -> RouteDecision? {
         switch context.mode {
         case .onDevice:
             return .onDevice(.userSelectedOnDevice)
@@ -236,7 +236,7 @@ enum RequestClassifier {
         "text Mike that I'm running late" -> contacts
         "wake me up at 7" -> alarm
         "set a timer for 10 minutes" -> alarm
-        "what's the weather in Warsaw tomorrow" -> weather
+        "what's the weather in Paris tomorrow" -> weather
         "do I need an umbrella today" -> weather
         "where am I" -> places
         "find a pharmacy nearby" -> places
@@ -270,20 +270,20 @@ enum RequestClassifier {
     /// Requests for switched-off tools: weather and places can still be answered from the web;
     /// personal data can't, so the on-device model explains that.
     static func decision(for category: RequestCategory, availableTools: Set<ToolGroup>) -> RouteDecision {
-        func tool(_ group: ToolGroup, _ reason: RouteReason, otherwise fallback: RouteDecision) -> RouteDecision {
-            availableTools.contains(group) ? .onDevice(reason) : fallback
+        func tool(_ group: ToolGroup) -> RouteDecision {
+            availableTools.contains(group) ? .onDevice(group.routeReason) : group.fallback
         }
         return switch category {
         case .smallTalk: .onDevice(.smallTalk)
         case .simpleQuestion: .onDevice(.simple)
         case .writing: .onDevice(.writing)
         case .deviceAction: .onDevice(.deviceAction)
-        case .personalData: tool(.schedule, .personalData, otherwise: .onDevice(.deviceAction))
-        case .contacts: tool(.contacts, .contacts, otherwise: .onDevice(.deviceAction))
-        case .alarm: tool(.alarms, .alarm, otherwise: .onDevice(.deviceAction))
-        case .health: tool(.health, .health, otherwise: .onDevice(.deviceAction))
-        case .weather: tool(.weather, .weather, otherwise: .cloud(.freshInformation))
-        case .places: tool(.places, .places, otherwise: .cloud(.freshInformation))
+        case .personalData: tool(.schedule)
+        case .contacts: tool(.contacts)
+        case .alarm: tool(.alarms)
+        case .health: tool(.health)
+        case .weather: tool(.weather)
+        case .places: tool(.places)
         case .math: .cloud(.math)
         case .freshInformation: .cloud(.freshInformation)
         case .complexReasoning: .cloud(.complexReasoning)
@@ -333,6 +333,29 @@ enum RequestClassifier {
     }
 }
 
+extension ToolGroup {
+    /// Why a request for this group's tools is answered on-device.
+    var routeReason: RouteReason {
+        switch self {
+        case .schedule: .personalData
+        case .contacts: .contacts
+        case .alarms: .alarm
+        case .weather: .weather
+        case .places: .places
+        case .health: .health
+        }
+    }
+
+    /// Where such a request goes when the group is switched off: weather and places can be
+    /// answered from the web; personal data can't, so the on-device model explains that.
+    var fallback: RouteDecision {
+        switch self {
+        case .weather, .places: .cloud(.freshInformation)
+        case .schedule, .contacts, .alarms, .health: .onDevice(.deviceAction)
+        }
+    }
+}
+
 // MARK: - Refusal detection
 
 @Generable
@@ -375,7 +398,7 @@ enum RefusalDetector {
 // MARK: - Cloud policy
 
 /// How the cloud policy affects an Auto decision.
-public enum PolicyOutcome: Equatable, Sendable {
+enum PolicyOutcome: Equatable, Sendable {
     /// Use the decision as is.
     case proceed(RouteDecision)
     /// The cloud is needed but the user has to approve it first.
@@ -386,7 +409,7 @@ public enum PolicyOutcome: Equatable, Sendable {
 
 extension CloudPolicy {
     /// Explicit modes (On-device / Cloud) are the user's own choice and bypass the policy.
-    public func apply(to decision: RouteDecision, mode: RoutingMode, chatAllowsCloud: Bool) -> PolicyOutcome {
+    func apply(to decision: RouteDecision, mode: RoutingMode, chatAllowsCloud: Bool) -> PolicyOutcome {
         guard mode == .auto, decision.backend == .cloud else { return .proceed(decision) }
         switch self {
         case .alwaysAllow:

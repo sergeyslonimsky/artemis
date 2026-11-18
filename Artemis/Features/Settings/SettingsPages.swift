@@ -65,36 +65,14 @@ struct ProvidersSettingsView: View {
                             }
                             Spacer()
                             if provider.id == model.defaultProvider?.id {
-                                Text("Default")
-                                    .font(.caption2.weight(.medium))
-                                    .padding(.horizontal, 7)
-                                    .padding(.vertical, 2)
-                                    .background(Color.accentColor.opacity(0.15), in: Capsule())
-                                    .foregroundStyle(Color.accentColor)
+                                TagBadge("Default")
                             }
                         }
                     }
                     .swipeActions(edge: .leading, allowsFullSwipe: true) {
                         if provider.id != model.defaultProvider?.id {
-                            Button {
-                                model.makeDefault(provider)
-                            } label: {
-                                Label("Default", systemImage: "star.fill")
-                            }
-                            .tint(.accentColor)
-                        }
-                    }
-                    .contextMenu {
-                        Button {
-                            model.makeDefault(provider)
-                        } label: {
-                            Label("Make Default", systemImage: "star")
-                        }
-                        .disabled(provider.id == model.defaultProvider?.id)
-                        Button {
-                            editing = provider
-                        } label: {
-                            Label("Edit", systemImage: "pencil")
+                            Button("Default", systemImage: "star.fill") { model.makeDefault(provider) }
+                                .tint(.accentColor)
                         }
                     }
                 }
@@ -102,11 +80,7 @@ struct ProvidersSettingsView: View {
                     offsets.map { model.providers[$0] }.forEach(model.deleteProvider)
                 }
 
-                Button {
-                    showingAdd = true
-                } label: {
-                    Label("Add Provider", systemImage: "plus")
-                }
+                Button("Add Provider", systemImage: "plus") { showingAdd = true }
             } footer: {
                 Text(model.providers.isEmpty
                      ? "Add OpenRouter, OpenAI, Mistral or any OpenAI-compatible endpoint with your own API key. Keys are stored in the Keychain."
@@ -115,6 +89,7 @@ struct ProvidersSettingsView: View {
         }
         .navigationTitle("Cloud providers")
         .navigationBarTitleDisplayMode(.inline)
+        .sensoryFeedback(.selection, trigger: model.settings.defaultProviderId)
         .sheet(isPresented: $showingAdd) {
             ProviderEditView(provider: nil, apiKey: "") { provider, apiKey in
                 model.saveProvider(provider, apiKey: apiKey)
@@ -137,9 +112,7 @@ struct RoutingSettingsView: View {
         Form {
             Section {
                 Picker("Default mode", selection: model.binding(\.routingMode)) {
-                    Text("Auto").tag(RoutingMode.auto)
-                    Text("On-device").tag(RoutingMode.onDevice)
-                    Text("Cloud").tag(RoutingMode.cloud)
+                    ForEach(RoutingMode.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
             } footer: {
                 Text(modeDescription)
@@ -147,9 +120,7 @@ struct RoutingSettingsView: View {
 
             Section {
                 Picker("Cloud in Auto mode", selection: model.binding(\.cloudPolicy)) {
-                    Text("Always ask").tag(CloudPolicy.alwaysAsk)
-                    Text("Always allow").tag(CloudPolicy.alwaysAllow)
-                    Text("Never").tag(CloudPolicy.deny)
+                    ForEach(CloudPolicy.pickerOrder, id: \.self) { Text($0.title).tag($0) }
                 }
             } footer: {
                 Text(policyDescription)
@@ -187,7 +158,7 @@ struct InstructionsSettingsView: View {
     var body: some View {
         Form {
             Section {
-                TextField("For example: answer briefly; I'm a software engineer in Warsaw.", text: $text, axis: .vertical)
+                TextField("For example: answer briefly; I'm a software engineer.", text: $text, axis: .vertical)
                     .lineLimit(6...20)
                     .focused($isFocused)
             } footer: {
@@ -245,21 +216,14 @@ struct PresetsSettingsView: View {
                             }
                             Spacer()
                             if preset.id == model.defaultPreset?.id {
-                                Text("Default")
-                                    .font(.caption2.weight(.medium))
-                                    .padding(.horizontal, 7)
-                                    .padding(.vertical, 2)
-                                    .background(Color.accentColor.opacity(0.15), in: Capsule())
-                                    .foregroundStyle(Color.accentColor)
+                                TagBadge("Default")
                             }
                         }
                     }
                     .swipeActions(edge: .leading, allowsFullSwipe: true) {
                         let isDefault = preset.id == model.defaultPreset?.id
-                        Button {
+                        Button(isDefault ? "No Default" : "Default", systemImage: isDefault ? "star.slash" : "star.fill") {
                             model.setDefaultPreset(isDefault ? nil : preset)
-                        } label: {
-                            Label(isDefault ? "No Default" : "Default", systemImage: isDefault ? "star.slash" : "star.fill")
                         }
                         .tint(.accentColor)
                     }
@@ -268,11 +232,7 @@ struct PresetsSettingsView: View {
                     offsets.map { model.presets[$0] }.forEach(model.deletePreset)
                 }
 
-                Button {
-                    showingAdd = true
-                } label: {
-                    Label("New Preset", systemImage: "plus")
-                }
+                Button("New Preset", systemImage: "plus") { showingAdd = true }
             } footer: {
                 Text("A preset is a reusable set of instructions and settings, like “Translator” or “Code reviewer”. "
                     + "Swipe right to make one the default for new chats; switch presets per chat from the model menu.")
@@ -280,6 +240,7 @@ struct PresetsSettingsView: View {
         }
         .navigationTitle("Presets")
         .navigationBarTitleDisplayMode(.inline)
+        .sensoryFeedback(.selection, trigger: model.settings.defaultPresetId)
         .sheet(isPresented: $showingAdd) {
             PresetEditView(preset: nil, onSave: model.savePreset)
         }
@@ -372,7 +333,7 @@ struct DeviceDataSettingsView: View {
             }
             Section("Sources") {
                 ForEach(ToolGroup.allCases) { group in
-                    Toggle(isOn: binding(for: group)) {
+                    Toggle(isOn: model.binding(group, in: \.disabledToolGroups, inverted: true)) {
                         Label {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(group.title)
@@ -414,54 +375,34 @@ struct DeviceDataSettingsView: View {
         .navigationTitle("Device data & actions")
         .navigationBarTitleDisplayMode(.inline)
     }
-
-    private func binding(for group: ToolGroup) -> Binding<Bool> {
-        Binding(
-            get: { !model.settings.disabledToolGroups.contains(group) },
-            set: { isOn in
-                model.update { settings in
-                    if isOn {
-                        settings.disabledToolGroups.remove(group)
-                    } else {
-                        settings.disabledToolGroups.insert(group)
-                    }
-                }
-            }
-        )
-    }
 }
 
 // MARK: - Voice & dictation
 
 struct VoiceSettingsView: View {
-    @State private var selected = VoiceSettingsView.currentLocale
+    @AppStorage(VoicePreferences.localeKey) private var selected = Locale.current.identifier
     @State private var suggested: [Locale] = []
     @State private var others: [Locale] = []
 
-    static let localeKey = "voiceLocale"
-
-    static var currentLocale: Locale {
-        UserDefaults.standard.string(forKey: localeKey).map(Locale.init(identifier:)) ?? Locale.current
-    }
-
-    static var currentLanguageName: String {
-        VoiceSession.name(of: currentLocale)
-    }
-
     var body: some View {
         Form {
-            Section {
-                languageRows(suggested)
-            } header: {
-                Text("Spoken language")
-            } footer: {
-                Text("Used to recognize your speech in voice mode and dictation, on this device. A language is downloaded the first time you use it.")
-            }
-            if !others.isEmpty {
-                Section("Other languages") {
-                    languageRows(others)
+            Picker("Spoken language", selection: $selected) {
+                Section {
+                    languageRows(suggested)
+                } header: {
+                    Text("Spoken language")
+                } footer: {
+                    Text("Used to recognize your speech in voice mode and dictation, on this device. A language is downloaded the first time you use it.")
+                }
+                if !others.isEmpty {
+                    Section("Other languages") {
+                        languageRows(others)
+                    }
                 }
             }
+            .pickerStyle(.inline)
+            .labelsHidden()
+
             Section {
                 Text("Replies are read with the best voice installed for their language. For natural speech, download an Enhanced or Premium voice in Settings › Accessibility › Spoken Content › Voices.")
                     .font(.footnote)
@@ -473,30 +414,17 @@ struct VoiceSettingsView: View {
         .navigationTitle("Voice & dictation")
         .navigationBarTitleDisplayMode(.inline)
         .task {
-            suggested = await VoiceSession.suggestedLocales(current: selected)
+            suggested = await VoiceSession.suggestedLocales(current: Locale(identifier: selected))
             let all = await SpeechTranscriber.supportedLocales
             others = all
                 .filter { locale in !suggested.contains { $0.identifier == locale.identifier } }
-                .sorted { VoiceSession.name(of: $0) < VoiceSession.name(of: $1) }
+                .sorted { $0.displayName < $1.displayName }
         }
     }
 
     private func languageRows(_ locales: [Locale]) -> some View {
         ForEach(locales, id: \.identifier) { locale in
-            Button {
-                selected = locale
-                UserDefaults.standard.set(locale.identifier, forKey: Self.localeKey)
-            } label: {
-                HStack {
-                    Text(VoiceSession.name(of: locale))
-                        .foregroundStyle(Color.primary)
-                    Spacer()
-                    if locale.identifier == selected.identifier {
-                        Image(systemName: "checkmark")
-                            .foregroundStyle(Color.accentColor)
-                    }
-                }
-            }
+            Text(locale.displayName).tag(locale.identifier)
         }
     }
 }

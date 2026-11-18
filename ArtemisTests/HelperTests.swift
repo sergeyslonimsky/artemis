@@ -88,4 +88,34 @@ struct ProviderTests {
         // Nothing reported: the kind's defaults.
         #expect(provider.capabilities(for: "unknown") == ProviderKind.openRouter.capabilities)
     }
+
+    @Test func modelNames() {
+        let name = ModelName("anthropic/claude-sonnet-4.5:free")
+        #expect(name.title == "claude-sonnet-4.5")
+        #expect(name.vendor == "anthropic")
+        #expect(name.isFree)
+        #expect(ModelName("gpt-5").vendor == nil)
+        #expect(ModelName.label(provider: "OpenRouter", model: nil) == "OpenRouter")
+        #expect(ModelName.label(provider: nil, model: "") == nil)
+    }
+
+    @Test func presetPromptReplacesTheGeneralOne() {
+        let preset = Preset(title: "Translator", systemPrompt: "Translate.")
+        #expect(Preset.effectiveSystemPrompt(preset: preset, fallback: "Be brief.") == "Translate.")
+        #expect(Preset.effectiveSystemPrompt(preset: Preset(title: "Empty"), fallback: "Be brief.") == "Be brief.")
+        #expect(Preset.effectiveSystemPrompt(preset: nil, fallback: "") == nil)
+    }
+
+    @Test func textDocumentsIncludeXMLButNotPDF() {
+        let xml = Attachment(filename: "a.xml", mime: "application/xml", kind: .document, data: Data("<a/>".utf8))
+        let pdf = Attachment(filename: "a.pdf", mime: "application/pdf", kind: .document, data: Data())
+        #expect(xml.text == "<a/>")
+        #expect(!pdf.isTextDocument)
+    }
+
+    @Test func everyToolGroupRoutesBackToItself() {
+        for group in ToolGroup.allCases {
+            #expect(group.routeReason.toolGroups == [group])
+        }
+    }
 }

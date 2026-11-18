@@ -1,5 +1,22 @@
 import Foundation
+@preconcurrency import MessageUI
 import UIKit
+
+/// A system screen that finishes a drafted action: the message or mail composer, or the
+/// calendar's event editor. The draft counts as done only if the user sends or saves there.
+struct DraftSheet: Identifiable, Equatable {
+    enum Kind: Equatable {
+        case compose
+        case editEvent
+    }
+
+    let kind: Kind
+    let draft: ActionDraft
+    /// The message the draft card belongs to.
+    let messageId: String
+
+    var id: String { draft.id }
+}
 
 /// Carries out a draft the user confirmed.
 @MainActor
@@ -16,14 +33,45 @@ enum DraftPerformer {
         }
     }
 
-    /// Confirms or dismisses a draft shown under `messageId` and records the outcome.
-    static func resolve(_ draft: ActionDraft, messageId: String, confirm: Bool, database: AppDatabase = .shared) async throws {
+    enum Outcome {
+        /// Carried out (or dismissed) and recorded.
+        case done
+        /// The user finishes it in a system screen; record the result with `finish(_:sent:)`.
+        case needsSheet(DraftSheet)
+    }
+
+    /// Confirms or dismisses a draft shown under `messageId` and records the outcome. Messages and
+    /// emails open the system composer when the device has one, so they are sent from the app.
+    static func resolve(
+        _ draft: ActionDraft,
+        messageId: String,
+        confirm: Bool,
+        database: AppDatabase = .shared
+    ) async throws -> Outcome {
         guard confirm else {
             try database.setDraftStatus(messageId: messageId, draftId: draft.id, status: .dismissed)
-            return
+            return .done
+        }
+        if canCompose(draft.kind) {
+            return .needsSheet(DraftSheet(kind: .compose, draft: draft, messageId: messageId))
         }
         try await perform(draft)
         try database.setDraftStatus(messageId: messageId, draftId: draft.id, status: .added)
+        return .done
+    }
+
+    /// Records the result of a system composer or editor; cancelling leaves the draft pending.
+    static func finish(_ sheet: DraftSheet, completed: Bool, database: AppDatabase = .shared) throws {
+        guard completed else { return }
+        try database.setDraftStatus(messageId: sheet.messageId, draftId: sheet.draft.id, status: .added)
+    }
+
+    private static func canCompose(_ kind: ActionDraft.Kind) -> Bool {
+        switch kind {
+        case .message: MFMessageComposeViewController.canSendText()
+        case .email: MFMailComposeViewController.canSendMail()
+        default: false
+        }
     }
 
     /// What to say once a draft is confirmed (voice mode).
@@ -34,7 +82,7 @@ enum DraftPerformer {
         case .alarm: "Alarm set for \(draft.date.formatted(date: .omitted, time: .shortened))."
         case .timer: "Timer started."
         case .call: "Calling \(draft.title)."
-        case .message, .email: "Opening the message to \(draft.title)."
+        case .message, .email: "Here's the message to \(draft.title). Tap Send when it's ready."
         }
     }
 

@@ -3,55 +3,51 @@ import UIKit
 import os
 
 /// Live state of a turn: routing, then streaming the reply.
-public struct ChatRunState: Equatable, Sendable {
-    public enum Phase: Sendable {
+struct ChatRunState: Equatable, Sendable {
+    enum Phase: Sendable {
         /// Deciding between the on-device model and the cloud.
         case routing
         case generating
         case finished
     }
 
-    public let token: UUID
-    public var phase: Phase = .routing
+    let token: UUID
+    var phase: Phase = .routing
     /// The assistant message being generated, once routing is done.
-    public var messageId: String?
-    public var content: String = ""
-    public var reasoning: String = ""
+    var messageId: String?
+    var content = ""
+    var reasoning = ""
     /// Personal-data tool the on-device model is using right now ("Checking your calendar…").
-    public var activity: PersonalDataSource?
+    var activity: PersonalDataSource?
 
-    public var isActive: Bool { phase != .finished }
+    var isActive: Bool { phase != .finished }
 }
 
 /// A cloud model the user picked for this chat.
-public struct CloudTarget: Equatable, Sendable {
-    public var provider: Provider
-    public var model: String
-
-    public init(provider: Provider, model: String) {
-        self.provider = provider
-        self.model = model
-    }
+struct CloudTarget: Equatable, Sendable {
+    var provider: Provider
+    var model: String
 }
 
 /// How the chat wants its turns routed.
-public struct RouteRequest: Equatable, Sendable {
-    public var mode: RoutingMode
+struct RouteRequest: Equatable, Sendable {
+    var mode: RoutingMode
     /// Used in Cloud mode and for escalation in Auto mode.
-    public var cloud: CloudTarget?
+    var cloud: CloudTarget?
+}
 
-    public init(mode: RoutingMode, cloud: CloudTarget?) {
-        self.mode = mode
-        self.cloud = cloud
-    }
+/// The chat's current choices that every turn is answered with.
+struct TurnOptions: Equatable, Sendable {
+    var route: RouteRequest
+    var preset: Preset?
 }
 
 /// Owns turns: routing, cloud consent, generation and escalation. Turns outlive any particular
 /// `ChatView`: views observe `runs` for live state and the database for everything else.
 @MainActor
 @Observable
-public final class ChatService {
-    public static let shared = ChatService()
+final class ChatService {
+    static let shared = ChatService()
 
     private static let logger = Logger(subsystem: "com.artemis.ios", category: "ChatService")
 
@@ -61,172 +57,163 @@ public final class ChatService {
 
     /// Latest run per chat. Kept after completion (`phase == .finished`) until the next run,
     /// so the bubble never flashes empty while the database observation catches up.
-    public private(set) var runs: [String: ChatRunState] = [:]
+    private(set) var runs: [String: ChatRunState] = [:]
 
-    @ObservationIgnored private var tasks: [String: Task<Void, Never>] = [:]
+    /// The task and background-execution grant of each chat's active run.
+    private struct Execution {
+        var task: Task<Void, Never>
+        var backgroundTask: UIBackgroundTaskIdentifier
+    }
+
+    @ObservationIgnored private var executions: [String: Execution] = [:]
     /// Chats in voice mode: their replies are written to be read aloud.
     @ObservationIgnored private var voiceChats: Set<String> = []
-    @ObservationIgnored private var backgroundTasks: [String: UIBackgroundTaskIdentifier] = [:]
 
-    public init(database: AppDatabase = .shared) {
+    init(database: AppDatabase = .shared) {
         self.database = database
         self.autoTitling = AutoTitlingService(database: database)
     }
 
-    public func isRunning(chatId: String) -> Bool {
+    func isRunning(chatId: String) -> Bool {
         runs[chatId]?.isActive == true
     }
 
-    public func isRouting(chatId: String) -> Bool {
+    func isRouting(chatId: String) -> Bool {
         runs[chatId]?.phase == .routing
     }
 
     /// Live text for `messageId` while it is being generated.
-    public func liveState(chatId: String, messageId: String) -> ChatRunState? {
+    func liveState(chatId: String, messageId: String) -> ChatRunState? {
         guard let run = runs[chatId], run.messageId == messageId else { return nil }
         return run
     }
 
-    public func setVoiceMode(_ isOn: Bool, chatId: String) {
+    func setVoiceMode(_ isOn: Bool, chatId: String) {
         if isOn { voiceChats.insert(chatId) } else { voiceChats.remove(chatId) }
     }
 
     /// Stops the turn. A partial reply is kept and marked cancelled.
-    public func cancel(chatId: String) {
-        tasks[chatId]?.cancel()
+    func cancel(chatId: String) {
+        executions[chatId]?.task.cancel()
     }
 
-    // MARK: - Public actions
+    // MARK: - Actions
 
     /// Appends the user's message and answers it.
-    public func send(
-        chatId: String,
-        content: String,
-        attachments: [Attachment] = [],
-        route: RouteRequest,
-        preset: Preset? = nil
-    ) throws {
+    func send(chatId: String, content: String, attachments: [Attachment] = [], options: TurnOptions) throws {
         cancel(chatId: chatId)
         try database.deletePendingConsents(chatId: chatId)
         try database.addMessage(Message(chatId: chatId, role: .user, content: content, attachments: attachments))
-        startTurn(chatId: chatId, route: route, preset: preset, forced: nil)
+        startTurn(chatId: chatId, options: options, forced: nil)
     }
 
     /// Drops `messageId` and everything after it, then answers the remaining history again.
-    public func regenerate(chatId: String, fromMessageId messageId: String, route: RouteRequest, preset: Preset? = nil) throws {
-        cancel(chatId: chatId)
-        try database.deleteMessagesFrom(chatId: chatId, messageId: messageId)
-        startTurn(chatId: chatId, route: route, preset: preset, forced: nil)
+    func regenerate(chatId: String, fromMessageId messageId: String, options: TurnOptions) throws {
+        try restart(chatId: chatId, from: messageId, options: options, forced: nil)
     }
 
     /// Re-answers an on-device reply with the cloud model. An explicit request counts as consent.
-    public func askCloud(chatId: String, replacing messageId: String, route: RouteRequest, preset: Preset? = nil) throws {
-        cancel(chatId: chatId)
-        try database.deleteMessagesFrom(chatId: chatId, messageId: messageId)
-        startTurn(chatId: chatId, route: route, preset: preset, forced: .cloud(.userAskedCloud))
+    func askCloud(chatId: String, replacing messageId: String, options: TurnOptions) throws {
+        try restart(chatId: chatId, from: messageId, options: options, forced: .cloud(.userAskedCloud))
     }
 
-    /// Answers a consent prompt: send this turn to the cloud, or answer on-device anyway.
-    public func resolveConsent(
-        chatId: String,
-        consent: Message,
-        allow: Bool,
-        rememberForChat: Bool,
-        route: RouteRequest,
-        preset: Preset? = nil
-    ) throws {
-        cancel(chatId: chatId)
-        try database.deleteMessagesFrom(chatId: chatId, messageId: consent.id)
-        if allow && rememberForChat {
+    /// Answers a consent prompt: send this turn to the cloud (and stop asking in this chat),
+    /// or answer on-device anyway.
+    func resolveConsent(chatId: String, consent: Message, allow: Bool, options: TurnOptions) throws {
+        if allow {
             try database.setChatCloudAllowed(chatId: chatId, allowed: true)
         }
         let reason = consent.routeReason ?? .userAskedCloud
-        startTurn(chatId: chatId, route: route, preset: preset, forced: allow ? .cloud(reason) : .onDevice(reason))
+        try restart(chatId: chatId, from: consent.id, options: options, forced: allow ? .cloud(reason) : .onDevice(reason))
+    }
+
+    private func restart(chatId: String, from messageId: String, options: TurnOptions, forced: RouteDecision?) throws {
+        cancel(chatId: chatId)
+        try database.deleteMessagesFrom(chatId: chatId, messageId: messageId)
+        startTurn(chatId: chatId, options: options, forced: forced)
     }
 
     // MARK: - Turn
 
     /// `forced` skips routing and the cloud policy (explicit user choices).
-    private func startTurn(chatId: String, route: RouteRequest, preset: Preset?, forced: RouteDecision?) {
+    private func startTurn(chatId: String, options: TurnOptions, forced: RouteDecision?) {
         let token = UUID()
         runs[chatId] = ChatRunState(token: token)
-        beginBackgroundTask(chatId: chatId)
-
-        tasks[chatId] = Task { [weak self] in
-            guard let self else { return }
-            await self.performTurn(chatId: chatId, token: token, route: route, preset: preset, forced: forced)
-            self.finishRun(chatId: chatId, token: token)
+        if let previous = executions.removeValue(forKey: chatId) {
+            endBackgroundTask(previous.backgroundTask)
         }
+
+        let backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "ArtemisReply") { [weak self] in
+            // Expiration handlers run on the main thread and must end the grant before returning.
+            MainActor.assumeIsolated {
+                self?.endBackgroundTask(chatId: chatId)
+            }
+        }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            let turn = Turn(chatId: chatId, token: token, options: options)
+            if let forced {
+                await reply(turn, decision: forced, mayEscalate: false)
+            } else {
+                await routeAndReply(turn)
+            }
+            finishRun(turn)
+        }
+        executions[chatId] = Execution(task: task, backgroundTask: backgroundTask)
     }
 
-    private func performTurn(chatId: String, token: UUID, route: RouteRequest, preset: Preset?, forced: RouteDecision?) async {
-        if let forced {
-            await reply(chatId: chatId, token: token, decision: forced, route: route, preset: preset, mayEscalate: false)
-            return
-        }
+    /// One run of a chat; `token` tells it apart from a newer run that replaced it.
+    private struct Turn {
+        let chatId: String
+        let token: UUID
+        let options: TurnOptions
+        var route: RouteRequest { options.route }
+    }
 
-        guard let context = routeContext(chatId: chatId, route: route) else { return }
+    private func routeAndReply(_ turn: Turn) async {
+        let settings = currentSettings()
+        guard let context = routeContext(turn, settings: settings) else { return }
         let decision = await router.route(context)
-        guard isCurrent(chatId: chatId, token: token), !Task.isCancelled else { return }
+        guard isCurrent(turn), !Task.isCancelled else { return }
         Self.logger.info("Routed to \(decision.backend.rawValue, privacy: .public): \(decision.reason.rawValue, privacy: .public)")
 
-        let settings = (try? database.fetchSettings()) ?? AppSettings()
-        let chatAllowsCloud = (try? database.fetchChat(id: chatId))?.cloudAllowed ?? false
-        switch settings.cloudPolicy.apply(to: decision, mode: route.mode, chatAllowsCloud: chatAllowsCloud) {
+        switch policyOutcome(for: decision, turn: turn, mode: turn.route.mode) {
         case .proceed(let decision):
             // Escalating is pointless when the cloud model is why the turn stayed local, or when the
             // turn is about personal data the cloud can't see.
-            let mayEscalate = route.mode == .auto && decision.reason != .cloudCantReadAttachment
+            let mayEscalate = turn.route.mode == .auto && decision.reason != .cloudCantReadAttachment
                 && !decision.reason.keepsDataOnDevice
-            await reply(chatId: chatId, token: token, decision: decision, route: route, preset: preset, mayEscalate: mayEscalate)
+            await reply(turn, decision: decision, mayEscalate: mayEscalate)
         case .keepOnDevice(let reason):
-            await reply(chatId: chatId, token: token, decision: .onDevice(reason), route: route, preset: preset, mayEscalate: false)
+            await reply(turn, decision: .onDevice(reason), mayEscalate: false)
         case .needsConsent(let reason):
-            askForConsent(chatId: chatId, reason: reason, route: route)
+            addAssistantMessage(turn, status: .awaitingConsent, backend: .cloud, reason: reason)
         }
     }
 
-    private func reply(
-        chatId: String,
-        token: UUID,
-        decision: RouteDecision,
-        route: RouteRequest,
-        preset: Preset?,
-        mayEscalate: Bool
-    ) async {
-        guard let backend = backend(for: decision.backend, route: route) else {
-            recordFailure(chatId: chatId, decision: decision, error: "Choose a cloud model to answer this message.")
+    private func reply(_ turn: Turn, decision: RouteDecision, mayEscalate: Bool) async {
+        guard let backend = backend(for: decision.backend, route: turn.route) else {
+            addAssistantMessage(turn, status: .failed, backend: decision.backend, reason: decision.reason,
+                                error: "Choose a cloud model to answer this message.")
             return
         }
+        guard let placeholder = addAssistantMessage(
+            turn, status: .streaming, backend: decision.backend, reason: decision.reason, descriptor: backend.descriptor
+        ) else { return }
 
-        let descriptor = backend.descriptor
-        let placeholder: Message
-        do {
-            placeholder = try database.addMessage(Message(
-                chatId: chatId,
-                role: .assistant,
-                content: "",
-                status: .streaming,
-                backend: descriptor.kind,
-                providerId: descriptor.providerId,
-                model: descriptor.model,
-                routeReason: decision.reason
-            ))
-        } catch {
-            Self.logger.error("Failed to add reply placeholder: \(error.localizedDescription, privacy: .public)")
-            return
-        }
-
-        runs[chatId]?.phase = .generating
-        runs[chatId]?.messageId = placeholder.id
-        runs[chatId]?.content = ""
-        runs[chatId]?.reasoning = ""
+        runs[turn.chatId]?.phase = .generating
+        runs[turn.chatId]?.messageId = placeholder.id
+        runs[turn.chatId]?.content = ""
+        runs[turn.chatId]?.reasoning = ""
 
         let job = ReplyJob(
-            database: database, chatId: chatId, messageId: placeholder.id, backend: backend, preset: preset,
+            database: database, chatId: turn.chatId, messageId: placeholder.id, backend: backend,
+            preset: turn.options.preset,
             toolGroups: decision.reason.toolGroups,
-            isVoice: voiceChats.contains(chatId)
+            isVoice: voiceChats.contains(turn.chatId)
         )
+        let token = turn.token
+        let chatId = turn.chatId
         let outcome = await job.run(
             onBatch: { [weak self] batch in
                 await self?.apply(batch, chatId: chatId, token: token)
@@ -235,54 +222,42 @@ public final class ChatService {
                 await self?.setActivity(source, chatId: chatId, token: token)
             }
         )
-        guard isCurrent(chatId: chatId, token: token) else { return }
+        guard isCurrent(turn) else { return }
 
-        if mayEscalate, decision.backend == .onDevice, route.cloud != nil, !outcome.extras.usedPrivateData, !Task.isCancelled {
-            var escalationReason: RouteReason?
-            if outcome.onDeviceError != nil {
-                escalationReason = .onDeviceFailed
-            } else if outcome.status == .done, outcome.extras.isEmpty, await RefusalDetector.isRefusal(outcome.content) {
-                // A reply built on tool results (weather, places…) is grounded, not a refusal.
-                escalationReason = .onDeviceDeclined
-            }
-            if let escalationReason, isCurrent(chatId: chatId, token: token), !Task.isCancelled {
-                await escalate(
-                    chatId: chatId, token: token, failedMessageId: placeholder.id,
-                    reason: escalationReason, route: route, preset: preset
-                )
-                return
-            }
+        if mayEscalate, decision.backend == .onDevice, turn.route.cloud != nil, !outcome.extras.usedPrivateData,
+           !Task.isCancelled, let reason = await escalationReason(for: outcome), isCurrent(turn), !Task.isCancelled {
+            await escalate(turn, failedMessageId: placeholder.id, reason: reason)
+            return
         }
 
         if outcome.status == .done {
-            generateTitle(chatId: chatId, outcome: outcome, replyBackend: backend)
+            generateTitle(chatId: turn.chatId, outcome: outcome, replyBackend: backend)
         }
     }
 
-    /// The on-device model failed or declined in Auto mode: retry in the cloud if the policy allows it.
-    private func escalate(
-        chatId: String,
-        token: UUID,
-        failedMessageId: String,
-        reason: RouteReason,
-        route: RouteRequest,
-        preset: Preset?
-    ) async {
-        guard route.cloud != nil else { return }
-        let settings = (try? database.fetchSettings()) ?? AppSettings()
-        let chatAllowsCloud = (try? database.fetchChat(id: chatId))?.cloudAllowed ?? false
+    /// Why an on-device reply should be retried in the cloud, if it should.
+    private func escalationReason(for outcome: ReplyJob.Outcome) async -> RouteReason? {
+        if outcome.onDeviceError != nil { return .onDeviceFailed }
+        // A reply built on tool results (weather, places…) is grounded, not a refusal.
+        if outcome.status == .done, outcome.extras.isEmpty, await RefusalDetector.isRefusal(outcome.content) {
+            return .onDeviceDeclined
+        }
+        return nil
+    }
 
-        switch settings.cloudPolicy.apply(to: .cloud(reason), mode: .auto, chatAllowsCloud: chatAllowsCloud) {
+    /// The on-device model failed or declined in Auto mode: retry in the cloud if the policy allows it.
+    private func escalate(_ turn: Turn, failedMessageId: String, reason: RouteReason) async {
+        switch policyOutcome(for: .cloud(reason), turn: turn, mode: .auto) {
         case .proceed(let decision):
-            try? database.deleteMessagesFrom(chatId: chatId, messageId: failedMessageId)
-            await reply(chatId: chatId, token: token, decision: decision, route: route, preset: preset, mayEscalate: false)
+            try? database.deleteMessagesFrom(chatId: turn.chatId, messageId: failedMessageId)
+            await reply(turn, decision: decision, mayEscalate: false)
         case .needsConsent(let reason) where reason == .onDeviceDeclined:
             // The reply may still be useful (the refusal check can be wrong): keep it, and offer
             // "Ask cloud" under it instead of replacing it with a consent prompt.
             try? database.setRouteReason(messageId: failedMessageId, reason: reason)
         case .needsConsent(let reason):
-            try? database.deleteMessagesFrom(chatId: chatId, messageId: failedMessageId)
-            askForConsent(chatId: chatId, reason: reason, route: route)
+            try? database.deleteMessagesFrom(chatId: turn.chatId, messageId: failedMessageId)
+            addAssistantMessage(turn, status: .awaitingConsent, backend: .cloud, reason: reason)
         case .keepOnDevice:
             // The reply or failure stays visible; its reason shows that a cloud model might do
             // better, and "Ask cloud" remains available as an explicit choice.
@@ -290,48 +265,54 @@ public final class ChatService {
         }
     }
 
-    private func askForConsent(chatId: String, reason: RouteReason, route: RouteRequest) {
+    private func policyOutcome(for decision: RouteDecision, turn: Turn, mode: RoutingMode) -> PolicyOutcome {
+        let chatAllowsCloud = (try? database.fetchChat(id: turn.chatId))?.cloudAllowed ?? false
+        return currentSettings().cloudPolicy.apply(to: decision, mode: mode, chatAllowsCloud: chatAllowsCloud)
+    }
+
+    /// Adds an assistant message: a streaming placeholder, a consent prompt or a failure.
+    /// A consent prompt names the chat's cloud model; a reply names whoever generates it.
+    @discardableResult
+    private func addAssistantMessage(
+        _ turn: Turn,
+        status: MessageStatus,
+        backend: BackendKind,
+        reason: RouteReason,
+        descriptor: BackendDescriptor? = nil,
+        error: String? = nil
+    ) -> Message? {
+        let consentTarget = status == .awaitingConsent ? turn.route.cloud : nil
         do {
-            try database.addMessage(Message(
-                chatId: chatId,
+            return try database.addMessage(Message(
+                chatId: turn.chatId,
                 role: .assistant,
                 content: "",
-                status: .awaitingConsent,
-                backend: .cloud,
-                providerId: route.cloud?.provider.id,
-                model: route.cloud?.model,
+                status: status,
+                error: error,
+                backend: descriptor?.kind ?? backend,
+                providerId: descriptor?.providerId ?? consentTarget?.provider.id,
+                model: descriptor?.model ?? consentTarget?.model,
                 routeReason: reason
             ))
         } catch {
-            Self.logger.error("Failed to add consent prompt: \(error.localizedDescription, privacy: .public)")
+            Self.logger.error("Failed to add \(status.rawValue, privacy: .public) message: \(error.localizedDescription, privacy: .public)")
+            return nil
         }
     }
 
-    private func recordFailure(chatId: String, decision: RouteDecision, error: String) {
-        _ = try? database.addMessage(Message(
-            chatId: chatId,
-            role: .assistant,
-            content: "",
-            status: .failed,
-            error: error,
-            backend: decision.backend,
-            routeReason: decision.reason
-        ))
-    }
-
-    private func routeContext(chatId: String, route: RouteRequest) -> RouteContext? {
-        guard let messages = try? database.fetchMessages(chatId: chatId),
+    private func routeContext(_ turn: Turn, settings: AppSettings) -> RouteContext? {
+        guard let messages = try? database.fetchMessages(chatId: turn.chatId),
               let index = messages.lastIndex(where: { $0.role == .user }) else {
             return nil
         }
-        let settings = (try? database.fetchSettings()) ?? AppSettings()
+        let cloud = turn.route.cloud
         return RouteContext(
             message: messages[index],
             recentHistory: Array(messages[..<index].filter(ReplyJob.belongsInContext).suffix(2)),
-            mode: route.mode,
-            onDeviceUsable: settings.onDeviceEnabled && OnDeviceModelStatus.current.isAvailable,
-            hasCloud: route.cloud != nil,
-            cloudCapabilities: route.cloud.map { $0.provider.capabilities(for: $0.model) },
+            mode: turn.route.mode,
+            onDeviceUsable: settings.isOnDeviceUsable,
+            hasCloud: cloud != nil,
+            cloudCapabilities: cloud.map { $0.provider.capabilities(for: $0.model) },
             availableTools: settings.enabledToolGroups
         )
     }
@@ -350,30 +331,51 @@ public final class ChatService {
         }
     }
 
+    private func currentSettings() -> AppSettings {
+        do {
+            return try database.fetchSettings()
+        } catch {
+            Self.logger.error("Failed to read settings: \(error.localizedDescription, privacy: .public)")
+            return AppSettings()
+        }
+    }
+
     // MARK: - Run state
 
-    private func isCurrent(chatId: String, token: UUID) -> Bool {
-        runs[chatId]?.token == token
+    private func isCurrent(_ turn: Turn) -> Bool {
+        runs[turn.chatId]?.token == turn.token
     }
 
     private func setActivity(_ source: PersonalDataSource?, chatId: String, token: UUID) {
-        guard isCurrent(chatId: chatId, token: token) else { return }
+        guard runs[chatId]?.token == token else { return }
         runs[chatId]?.activity = source
     }
 
     private func apply(_ batch: StreamBatcher.Batch, chatId: String, token: UUID) {
-        guard isCurrent(chatId: chatId, token: token) else { return }
+        guard runs[chatId]?.token == token else { return }
         if !batch.content.isEmpty { runs[chatId]?.activity = nil }
         runs[chatId]?.content += batch.content
         runs[chatId]?.reasoning += batch.reasoning
     }
 
-    private func finishRun(chatId: String, token: UUID) {
+    private func finishRun(_ turn: Turn) {
         // A newer run may have replaced this one (send right after cancel); leave it alone.
-        guard isCurrent(chatId: chatId, token: token) else { return }
-        runs[chatId]?.phase = .finished
-        tasks.removeValue(forKey: chatId)
-        endBackgroundTask(chatId: chatId)
+        guard isCurrent(turn) else { return }
+        runs[turn.chatId]?.phase = .finished
+        if let execution = executions.removeValue(forKey: turn.chatId) {
+            endBackgroundTask(execution.backgroundTask)
+        }
+    }
+
+    private func endBackgroundTask(chatId: String) {
+        guard let id = executions[chatId]?.backgroundTask else { return }
+        executions[chatId]?.backgroundTask = .invalid
+        endBackgroundTask(id)
+    }
+
+    private func endBackgroundTask(_ id: UIBackgroundTaskIdentifier) {
+        guard id != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(id)
     }
 
     // MARK: - Titles
@@ -394,187 +396,10 @@ public final class ChatService {
     /// Titles stay on-device when possible; a cloud reply may be titled by the same provider,
     /// since that conversation was already sent there.
     private func titlingBackend(for replyBackend: any ChatBackend) -> (any ChatBackend)? {
-        let settings = (try? database.fetchSettings()) ?? AppSettings()
-        let onDeviceUsable = settings.onDeviceEnabled && OnDeviceModelStatus.current.isAvailable
-        if onDeviceUsable && (settings.onDeviceTitles || replyBackend.descriptor.kind == .onDevice) {
+        let settings = currentSettings()
+        if settings.isOnDeviceUsable && (settings.onDeviceTitles || replyBackend.descriptor.kind == .onDevice) {
             return AppleOnDeviceBackend()
         }
         return replyBackend.descriptor.kind == .cloud ? replyBackend : nil
-    }
-
-    // MARK: - Background execution
-
-    private func beginBackgroundTask(chatId: String) {
-        endBackgroundTask(chatId: chatId)
-        backgroundTasks[chatId] = UIApplication.shared.beginBackgroundTask(withName: "ArtemisStream-\(chatId)") { [weak self] in
-            // Expiration handlers run on the main thread.
-            MainActor.assumeIsolated {
-                self?.endBackgroundTask(chatId: chatId)
-            }
-        }
-    }
-
-    private func endBackgroundTask(chatId: String) {
-        guard let id = backgroundTasks.removeValue(forKey: chatId), id != .invalid else { return }
-        UIApplication.shared.endBackgroundTask(id)
-    }
-}
-
-// MARK: - Reply job
-
-/// One assistant reply: reads history, streams from the provider and persists the result.
-/// Runs off the main actor; UI updates go through `onBatch`.
-struct ReplyJob: Sendable {
-    struct Outcome: Sendable {
-        var content = ""
-        var reasoning = ""
-        var status: MessageStatus = .done
-        var error: String?
-        var stats: MessageStats?
-        var lastUserPrompt = ""
-        /// Set when the on-device model failed; such failures may escalate to the cloud.
-        var onDeviceError: OnDeviceError?
-        var extras = MessageExtras()
-    }
-
-    let database: AppDatabase
-    let chatId: String
-    let messageId: String
-    let backend: any ChatBackend
-    let preset: Preset?
-    /// On-device tools the route allows; narrowed further by the settings.
-    var toolGroups: Set<ToolGroup> = []
-    /// The reply will be read aloud.
-    var isVoice = false
-
-    private static let voiceInstructions = """
-        The user is talking to you by voice and hears your reply read aloud. Answer conversationally, \
-        in a few short spoken sentences. Don't use Markdown, lists, tables, emoji or code unless the user asks. \
-        When you prepare a draft, say the user can say "yes" or tap the card to confirm it.
-        """
-
-    private static let logger = Logger(subsystem: "com.artemis.ios", category: "ReplyJob")
-
-    @concurrent
-    func run(
-        onBatch: @escaping @Sendable (StreamBatcher.Batch) async -> Void,
-        onActivity: @escaping @Sendable (PersonalDataSource?) async -> Void = { _ in }
-    ) async -> Outcome {
-        var outcome = Outcome()
-        var batcher = StreamBatcher()
-
-        do {
-            let isCloud = backend.descriptor.kind == .cloud
-            let history = try database.fetchMessages(chatId: chatId, includeAttachmentData: true)
-                .filter { $0.id != messageId && Self.belongsInContext($0) }
-                .map { isCloud ? Self.withoutPersonalData($0) : $0 }
-            outcome.lastUserPrompt = history.last(where: { $0.role == .user })?.content ?? ""
-
-            let settings = try database.fetchSettings()
-            var systemPrompt = settings.systemPrompt
-            var preset = preset
-            if isVoice {
-                // A preset's prompt replaces the default one, so the note goes wherever the prompt is.
-                if var custom = preset, !custom.systemPrompt.isEmpty {
-                    custom.systemPrompt += "\n\n" + Self.voiceInstructions
-                    preset = custom
-                } else {
-                    systemPrompt = systemPrompt.isEmpty ? Self.voiceInstructions : systemPrompt + "\n\n" + Self.voiceInstructions
-                }
-            }
-            var turn = ChatTurn(messages: history, systemPrompt: systemPrompt, preset: preset)
-            turn.conversationId = chatId
-            turn.replyId = messageId
-            turn.toolGroups = isCloud ? [] : toolGroups.intersection(settings.enabledToolGroups)
-
-            for try await event in backend.stream(turn) {
-                try Task.checkCancellation()
-                switch event {
-                case .content(let delta):
-                    outcome.content += delta
-                    if let batch = batcher.append(content: delta) { await onBatch(batch) }
-                case .reasoning(let delta):
-                    outcome.reasoning += delta
-                    if let batch = batcher.append(reasoning: delta) { await onBatch(batch) }
-                case .done(let tokens, let isEstimated, let durationMs):
-                    outcome.stats = MessageStats(tokens: tokens, isEstimated: isEstimated, durationMs: durationMs)
-                case .error(let message):
-                    throw ReplyError.provider(message)
-                case .toolStarted(let source):
-                    if !outcome.extras.personalDataUsed.contains(source) {
-                        outcome.extras.personalDataUsed.append(source)
-                    }
-                    await onActivity(source)
-                case .actionDraft(let draft):
-                    outcome.extras.drafts.append(draft)
-                }
-            }
-            // Backends may end the stream quietly when cancelled.
-            try Task.checkCancellation()
-
-            if outcome.content.isEmpty && outcome.reasoning.isEmpty {
-                throw ReplyError.emptyResponse
-            }
-        } catch {
-            if Task.isCancelled || error is CancellationError {
-                outcome.status = .cancelled
-            } else {
-                outcome.status = .failed
-                outcome.error = error.localizedDescription
-                outcome.onDeviceError = error as? OnDeviceError
-            }
-        }
-
-        if let batch = batcher.drain() { await onBatch(batch) }
-
-        do {
-            try database.finishMessage(
-                id: messageId,
-                content: outcome.content,
-                reasoning: outcome.reasoning,
-                status: outcome.status,
-                error: outcome.error,
-                stats: outcome.stats,
-                extras: outcome.extras
-            )
-        } catch {
-            Self.logger.error("Failed to persist reply \(messageId, privacy: .public): \(error.localizedDescription, privacy: .public)")
-        }
-        return outcome
-    }
-
-    /// Replies built from the user's private data stay on the device: the cloud provider sees that
-    /// such a reply existed, not what it said.
-    static func withoutPersonalData(_ message: Message) -> Message {
-        guard message.role == .assistant, message.extras.usedPrivateData else { return message }
-        var redacted = message
-        let sources = message.extras.personalDataUsed.filter(\.isPrivate).map(\.rawValue).joined(separator: ", ")
-        redacted.content = "[An on-device answer based on the user's private data (\(sources)), not shared.]"
-        return redacted
-    }
-
-    /// Failed or empty assistant turns carry no useful context for the model.
-    static func belongsInContext(_ message: Message) -> Bool {
-        guard message.role == .assistant else { return true }
-        switch message.status {
-        case .done, .cancelled:
-            return !message.content.isEmpty
-        case .failed, .streaming, .awaitingConsent:
-            return false
-        }
-    }
-}
-
-enum ReplyError: LocalizedError {
-    case provider(String)
-    case emptyResponse
-
-    var errorDescription: String? {
-        switch self {
-        case .provider(let message):
-            return message
-        case .emptyResponse:
-            return "The model returned an empty response."
-        }
     }
 }

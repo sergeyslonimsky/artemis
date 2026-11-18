@@ -1,5 +1,6 @@
 import Foundation
 import FoundationModels
+import Synchronization
 
 /// What the tools report back to the app while the model runs.
 enum ToolEvent: Sendable {
@@ -9,16 +10,15 @@ enum ToolEvent: Sendable {
 
 /// Routes tool events to the current turn. A cached session keeps its tools across turns,
 /// so the handler is swapped per turn instead of being captured by the tools.
-final class ToolEventSink: @unchecked Sendable {
-    private let lock = NSLock()
-    private var handler: (@Sendable (ToolEvent) -> Void)?
+final class ToolEventSink: Sendable {
+    private let handler = Mutex<(@Sendable (ToolEvent) -> Void)?>(nil)
 
     func setHandler(_ handler: (@Sendable (ToolEvent) -> Void)?) {
-        lock.withLock { self.handler = handler }
+        self.handler.withLock { $0 = handler }
     }
 
     func send(_ event: ToolEvent) {
-        let handler = lock.withLock { self.handler }
+        let handler = handler.withLock { $0 }
         handler?(event)
     }
 }
@@ -93,6 +93,16 @@ enum PersonalDataTools {
         return nil
     }
 
+    /// A bulleted list of at most `limit` items, then how many were left out: tool output shares
+    /// the model's small context window.
+    static func list<Item>(_ items: [Item], limit: Int = 30, line: (Item) -> String) -> String {
+        var lines = items.prefix(limit).map { "- " + line($0) }
+        if items.count > limit {
+            lines.append("…and \(items.count - limit) more.")
+        }
+        return lines.joined(separator: "\n")
+    }
+
     static func describe(_ date: Date, withTime: Bool) -> String {
         withTime
             ? date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).hour().minute())
@@ -130,16 +140,13 @@ struct CalendarEventsTool: Tool {
         }
         guard !events.isEmpty else { return "No events in this period." }
 
-        // Compact lines: tool output shares the small context window.
-        let lines = events.prefix(30).map { event -> String in
+        return PersonalDataTools.list(events) { event in
             let when = event.isAllDay
                 ? PersonalDataTools.describe(event.start, withTime: false) + ", all day"
                 : PersonalDataTools.describe(event.start, withTime: true) + "–" + event.end.formatted(date: .omitted, time: .shortened)
             let location = event.location.map { " @ \($0)" } ?? ""
-            return "- \(when): \(event.title)\(location)"
+            return "\(when): \(event.title)\(location)"
         }
-        let more = events.count > 30 ? "\n…and \(events.count - 30) more." : ""
-        return lines.joined(separator: "\n") + more
     }
 }
 
@@ -167,12 +174,10 @@ struct RemindersTool: Tool {
         }
         guard !reminders.isEmpty else { return "No open reminders." }
 
-        let lines = reminders.prefix(30).map { reminder -> String in
+        return PersonalDataTools.list(reminders) { reminder in
             let due = reminder.due.map { " (due \(PersonalDataTools.describe($0, withTime: reminder.dueHasTime)))" } ?? ""
-            return "- \(reminder.title)\(due)"
+            return "\(reminder.title)\(due)"
         }
-        let more = reminders.count > 30 ? "\n…and \(reminders.count - 30) more." : ""
-        return lines.joined(separator: "\n") + more
     }
 }
 

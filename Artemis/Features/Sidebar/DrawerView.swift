@@ -2,205 +2,117 @@ import SwiftUI
 import os
 
 /// Chat history, search and settings, shown in the slide-in drawer.
-public struct DrawerView: View {
-    public let selectedChatId: String
-    public var onSelectChat: (String) -> Void
-    public var onNewChat: () -> Void
-    public var onDeleteChat: (String) -> Void
-    public var onOpenSettings: () -> Void
+struct DrawerView: View {
+    let selectedChatId: String
+    var onSelectChat: (String) -> Void
+    var onNewChat: () -> Void
+    var onDeleteChat: (String) -> Void
+    var onOpenSettings: () -> Void
 
     @State private var chats: [Chat] = []
-    @State private var searchQuery: String = ""
+    @State private var searchQuery = ""
     @State private var searchHits: [SearchHit] = []
     @State private var chatToRename: Chat?
-    @State private var renameText: String = ""
+    @State private var renameText = ""
+    @State private var errorMessage: String?
 
-    private let database = AppDatabase.shared
+    @Environment(\.database) private var database
     private let chatService = ChatService.shared
     private static let logger = Logger(subsystem: "com.artemis.ios", category: "DrawerView")
 
-    public init(
-        selectedChatId: String,
-        onSelectChat: @escaping (String) -> Void,
-        onNewChat: @escaping () -> Void,
-        onDeleteChat: @escaping (String) -> Void,
-        onOpenSettings: @escaping () -> Void
-    ) {
-        self.selectedChatId = selectedChatId
-        self.onSelectChat = onSelectChat
-        self.onNewChat = onNewChat
-        self.onDeleteChat = onDeleteChat
-        self.onOpenSettings = onOpenSettings
+    /// Tapping a row selects its chat; the list highlights the open one.
+    private var selection: Binding<String?> {
+        Binding(get: { selectedChatId }, set: { id in
+            if let id { onSelectChat(id) }
+        })
     }
 
-    public var body: some View {
-        VStack(spacing: 0) {
-            searchField
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-                .padding(.bottom, 4)
+    private var isSearching: Bool {
+        !searchQuery.trimmingCharacters(in: .whitespaces).isEmpty
+    }
 
-            List {
-                if searchQuery.isEmpty {
-                    newChatRow
-                    ForEach(groupedChats, id: \.title) { group in
-                        // Plain rows rather than section headers: those add tall, sticky spacing.
-                        Text(group.title)
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 14, leading: 20, bottom: 2, trailing: 20))
+    /// Lives in a navigation container: the drawer's stack on iPhone, the split view's sidebar on iPad.
+    var body: some View {
+        List(selection: selection) {
+            if isSearching {
+                ForEach(searchHits) { hit in
+                    chatRow(hit.chat, snippet: hit.snippet)
+                }
+            } else {
+                ForEach(groupedChats, id: \.title) { group in
+                    Section(group.title) {
                         ForEach(group.chats) { chat in
                             chatRow(chat)
                         }
                     }
-                } else {
-                    ForEach(searchHits) { hit in
-                        chatRow(hit.chat, snippet: hit.snippet)
-                    }
-                    if searchHits.isEmpty {
-                        Text("No matches")
-                            .foregroundStyle(.secondary)
-                            .listRowSeparator(.hidden)
-                    }
                 }
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .environment(\.defaultMinListRowHeight, 40)
-
-            Divider()
-            settingsButton
         }
-        .background(Color(uiColor: .systemBackground))
+        .listStyle(.sidebar)
+        .overlay {
+            if isSearching && searchHits.isEmpty {
+                ContentUnavailableView.search(text: searchQuery)
+            } else if !isSearching && chats.isEmpty {
+                ContentUnavailableView("No Chats Yet", systemImage: "bubble.left.and.bubble.right",
+                                       description: Text("Your conversations will appear here."))
+            }
+        }
+        .navigationTitle("Chats")
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $searchQuery, placement: .navigationBarDrawer(displayMode: .always))
+        .autocorrectionDisabled()
+        .textInputAutocapitalization(.never)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("New chat", systemImage: "square.and.pencil", action: onNewChat)
+            }
+            ToolbarItem(placement: .bottomBar) {
+                Button("Settings", systemImage: "gearshape", action: onOpenSettings)
+            }
+            ToolbarSpacer(.flexible, placement: .bottomBar)
+        }
         .task { await observeChats() }
-        .onChange(of: searchQuery) { _, query in
-            performSearch(query)
-        }
-        .alert("Rename Chat", isPresented: Binding(get: { chatToRename != nil }, set: { if !$0 { chatToRename = nil } })) {
+        .task(id: searchQuery) { await search() }
+        .alert("Rename Chat", isPresented: Binding(get: { chatToRename != nil }, set: { if !$0 { chatToRename = nil } }), presenting: chatToRename) { chat in
             TextField("Chat title", text: $renameText)
             Button("Cancel", role: .cancel) {}
-            Button("Save") {
-                if let chat = chatToRename, !renameText.trimmingCharacters(in: .whitespaces).isEmpty {
-                    try? database.renameChat(chatId: chat.id, title: renameText)
-                }
-            }
+            Button("Save") { rename(chat) }
         }
+        .errorAlert("Something went wrong", message: $errorMessage)
     }
 
     // MARK: - Pieces
 
-    private var searchField: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-            TextField("Search", text: $searchQuery)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            if !searchQuery.isEmpty {
-                Button {
-                    searchQuery = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.tertiary)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background(Color(uiColor: .secondarySystemBackground), in: Capsule())
-    }
-
-    private var newChatRow: some View {
-        Button(action: onNewChat) {
-            Label("New chat", systemImage: "square.and.pencil")
-                .font(.body.weight(.medium))
-                .foregroundStyle(.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .listRowSeparator(.hidden)
-        .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
-    }
-
     private func chatRow(_ chat: Chat, snippet: String = "") -> some View {
-        let isSelected = chat.id == selectedChatId
-        return Button {
-            onSelectChat(chat.id)
-        } label: {
-            HStack(spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(chat.title)
-                        .font(.body)
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    if !snippet.isEmpty {
-                        Text(snippet)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                    }
-                }
-                Spacer(minLength: 0)
-                if chatService.isRunning(chatId: chat.id) {
-                    ProgressView()
-                        .controlSize(.small)
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(chat.title)
+                    .lineLimit(1)
+                if !snippet.isEmpty {
+                    Text(snippet)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(isSelected ? Color.secondary.opacity(0.15) : .clear)
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            Spacer(minLength: 0)
+            if chatService.isRunning(chatId: chat.id) {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel("Answering")
+            }
         }
-        .buttonStyle(.plain)
-        .listRowSeparator(.hidden)
-        .listRowBackground(Color.clear)
-        .listRowInsets(EdgeInsets(top: 1, leading: 8, bottom: 1, trailing: 8))
+        .tag(chat.id)
         .contextMenu {
-            Button {
+            Button("Rename", systemImage: "pencil") {
                 renameText = chat.title
                 chatToRename = chat
-            } label: {
-                Label("Rename", systemImage: "pencil")
             }
-            Button(role: .destructive) {
-                deleteChat(chat)
-            } label: {
-                Label("Delete", systemImage: "trash")
-            }
+            Button("Delete", systemImage: "trash", role: .destructive) { deleteChat(chat) }
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-            Button(role: .destructive) {
-                deleteChat(chat)
-            } label: {
-                Label("Delete", systemImage: "trash")
-            }
+            Button("Delete", systemImage: "trash", role: .destructive) { deleteChat(chat) }
         }
-    }
-
-    private var settingsButton: some View {
-        Button(action: onOpenSettings) {
-            HStack(spacing: 12) {
-                Image(systemName: "gearshape")
-                    .font(.body.weight(.medium))
-                    .frame(width: 32, height: 32)
-                    .background(Color(uiColor: .secondarySystemBackground), in: Circle())
-                Text("Settings")
-                    .font(.body.weight(.medium))
-                Spacer()
-            }
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: - Data
@@ -243,12 +155,38 @@ public struct DrawerView: View {
         do {
             for try await value in database.observeChats() {
                 chats = value
-                if !searchQuery.isEmpty {
-                    performSearch(searchQuery)
-                }
+                if isSearching { await search(debounce: false) }
             }
         } catch {
             Self.logger.error("Chats observation failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Full-text search after a short pause in typing, off the main thread.
+    private func search(debounce: Bool = true) async {
+        let query = searchQuery
+        guard isSearching else {
+            searchHits = []
+            return
+        }
+        if debounce {
+            do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
+        }
+        let database = database
+        let hits = await Task.detached(priority: .userInitiated) {
+            (try? database.search(query: query)) ?? []
+        }.value
+        guard !Task.isCancelled, query == searchQuery else { return }
+        searchHits = hits
+    }
+
+    private func rename(_ chat: Chat) {
+        let title = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        do {
+            try database.renameChat(chatId: chat.id, title: title)
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -256,17 +194,10 @@ public struct DrawerView: View {
         chatService.cancel(chatId: chat.id)
         do {
             try database.deleteChat(id: chat.id)
+            onDeleteChat(chat.id)
         } catch {
             Self.logger.error("Failed to delete chat: \(error.localizedDescription, privacy: .public)")
+            errorMessage = error.localizedDescription
         }
-        onDeleteChat(chat.id)
-    }
-
-    private func performSearch(_ query: String) {
-        guard !query.trimmingCharacters(in: .whitespaces).isEmpty else {
-            searchHits = []
-            return
-        }
-        searchHits = (try? database.search(query: query)) ?? []
     }
 }

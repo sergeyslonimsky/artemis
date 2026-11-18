@@ -3,23 +3,23 @@ import Foundation
 /// Coalesces stream fragments so high-speed models (100+ tokens/sec) do not trigger
 /// excessive UI layout passes. The owner awaits the returned batch itself, which keeps
 /// deltas strictly ordered.
-public struct StreamBatcher {
-    public struct Batch: Sendable, Equatable {
-        public var content: String
-        public var reasoning: String
+struct StreamBatcher {
+    struct Batch: Sendable, Equatable {
+        var content: String
+        var reasoning: String
     }
 
     private var pending = Batch(content: "", reasoning: "")
     private var lastFlushTime: Date
     private let flushInterval: TimeInterval
 
-    public init(flushInterval: TimeInterval = 0.080, now: Date = Date()) {
+    init(flushInterval: TimeInterval = 0.080, now: Date = Date()) {
         self.flushInterval = flushInterval
         self.lastFlushTime = now
     }
 
     /// Buffers the fragment and returns a batch once the flush interval has elapsed.
-    public mutating func append(content: String = "", reasoning: String = "", now: Date = Date()) -> Batch? {
+    mutating func append(content: String = "", reasoning: String = "", now: Date = Date()) -> Batch? {
         pending.content += content
         pending.reasoning += reasoning
         guard now.timeIntervalSince(lastFlushTime) >= flushInterval else { return nil }
@@ -27,7 +27,7 @@ public struct StreamBatcher {
     }
 
     /// Returns everything buffered so far, or `nil` when there is nothing pending.
-    public mutating func drain(now: Date = Date()) -> Batch? {
+    mutating func drain(now: Date = Date()) -> Batch? {
         guard !pending.content.isEmpty || !pending.reasoning.isEmpty else { return nil }
         let batch = pending
         pending = Batch(content: "", reasoning: "")

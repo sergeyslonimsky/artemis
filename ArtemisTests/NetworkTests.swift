@@ -148,21 +148,15 @@ struct StreamingTests {
 
     @Test func midStreamErrorWithHTTP200() async throws {
         let body = chunk(content: "Par") + "data: {\"error\":{\"message\":\"Upstream rejected the request\"}}\n\n"
-        let events = try await collect(body: body)
-        guard case .error(let message) = events.last else {
-            Issue.record("Missing .error")
-            return
+        await #expect(throws: LLMError.provider("Upstream rejected the request")) {
+            try await collect(body: body)
         }
-        #expect(message == "Upstream rejected the request")
     }
 
     @Test func httpErrorBodyIsReadable() async throws {
-        let events = try await collect(status: 400, body: #"{"error":{"message":"Model doesn't accept images"}}"#)
-        guard case .error(let message) = events.first else {
-            Issue.record("Missing .error")
-            return
+        await #expect(throws: LLMError.http(status: 400, message: "Model doesn't accept images (HTTP 400)")) {
+            try await collect(status: 400, body: #"{"error":{"message":"Model doesn't accept images"}}"#)
         }
-        #expect(message == "Model doesn't accept images (HTTP 400)")
     }
 
     @Test func errorMessageFallbacks() {

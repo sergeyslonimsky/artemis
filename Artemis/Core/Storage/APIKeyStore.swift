@@ -1,17 +1,18 @@
 import Foundation
 import Security
+import Synchronization
 
 /// Stores provider API keys outside of the SQLite database.
-public protocol APIKeyStore: Sendable {
+protocol APIKeyStore: Sendable {
     func apiKey(for providerId: String) -> String?
     func setAPIKey(_ key: String, for providerId: String) throws
     func deleteAPIKey(for providerId: String) throws
 }
 
-public enum APIKeyStoreError: LocalizedError {
+enum APIKeyStoreError: LocalizedError {
     case keychain(OSStatus)
 
-    public var errorDescription: String? {
+    var errorDescription: String? {
         switch self {
         case .keychain(let status):
             let message = SecCopyErrorMessageString(status, nil) as String? ?? "unknown error"
@@ -22,14 +23,14 @@ public enum APIKeyStoreError: LocalizedError {
 
 /// Keychain-backed store. Keys are device-only (excluded from backups) and readable after
 /// the first unlock so streaming can continue in the background.
-public struct KeychainAPIKeyStore: APIKeyStore {
+struct KeychainAPIKeyStore: APIKeyStore {
     private let service: String
 
-    public init(service: String = Bundle.main.bundleIdentifier.map { "\($0).api-keys" } ?? "artemis.api-keys") {
+    init(service: String = Bundle.main.bundleIdentifier.map { "\($0).api-keys" } ?? "artemis.api-keys") {
         self.service = service
     }
 
-    public func apiKey(for providerId: String) -> String? {
+    func apiKey(for providerId: String) -> String? {
         var query = baseQuery(providerId)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -42,7 +43,7 @@ public struct KeychainAPIKeyStore: APIKeyStore {
         return String(data: data, encoding: .utf8)
     }
 
-    public func setAPIKey(_ key: String, for providerId: String) throws {
+    func setAPIKey(_ key: String, for providerId: String) throws {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             try deleteAPIKey(for: providerId)
@@ -69,7 +70,7 @@ public struct KeychainAPIKeyStore: APIKeyStore {
         }
     }
 
-    public func deleteAPIKey(for providerId: String) throws {
+    func deleteAPIKey(for providerId: String) throws {
         let status = SecItemDelete(baseQuery(providerId) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw APIKeyStoreError.keychain(status)
@@ -86,21 +87,18 @@ public struct KeychainAPIKeyStore: APIKeyStore {
 }
 
 /// Volatile store for previews and tests.
-public final class InMemoryAPIKeyStore: APIKeyStore, @unchecked Sendable {
-    private let lock = NSLock()
-    private var keys: [String: String] = [:]
+final class InMemoryAPIKeyStore: APIKeyStore {
+    private let keys = Mutex<[String: String]>([:])
 
-    public init() {}
-
-    public func apiKey(for providerId: String) -> String? {
-        lock.withLock { keys[providerId] }
+    func apiKey(for providerId: String) -> String? {
+        keys.withLock { $0[providerId] }
     }
 
-    public func setAPIKey(_ key: String, for providerId: String) throws {
-        lock.withLock { keys[providerId] = key }
+    func setAPIKey(_ key: String, for providerId: String) throws {
+        keys.withLock { $0[providerId] = key }
     }
 
-    public func deleteAPIKey(for providerId: String) throws {
-        lock.withLock { _ = keys.removeValue(forKey: providerId) }
+    func deleteAPIKey(for providerId: String) throws {
+        _ = keys.withLock { $0.removeValue(forKey: providerId) }
     }
 }

@@ -1,85 +1,93 @@
 import SwiftUI
 
-public struct ReasoningView: View {
-    public let text: String
-    public let isStreaming: Bool
-    public let durationMs: Int?
+/// The model's reasoning, collapsed under "Thought for 2.3s". It opens by itself while the model
+/// thinks and closes when the answer starts, unless the user opened or closed it themselves.
+struct ReasoningView: View {
+    let text: String
+    var isStreaming = false
+    var durationMs: Int?
 
-    @State private var isOpen: Bool = false
-    @State private var userDecided: Bool = false
+    @State private var isExpanded = false
+    @State private var userDecided = false
 
-    public init(text: String, isStreaming: Bool = false, durationMs: Int? = nil) {
-        self.text = text
-        self.isStreaming = isStreaming
-        self.durationMs = durationMs
+    var body: some View {
+        DisclosureGroup(isExpanded: Binding(
+            get: { isExpanded },
+            set: { newValue in
+                userDecided = true
+                isExpanded = newValue
+            }
+        )) {
+            HStack(alignment: .top, spacing: 10) {
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(Color.primary.opacity(0.15))
+                    .frame(width: 2)
+
+                Text(text)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.leading, 2)
+        } label: {
+            Label {
+                Text(title)
+                    .shimmer(active: isStreaming)
+            } icon: {
+                Image(systemName: "brain.head.profile")
+            }
+        }
+        .disclosureGroupStyle(.reasoning)
+        .padding(.vertical, 4)
+        .sensoryFeedback(.impact(weight: .light), trigger: isExpanded) { _, _ in userDecided }
+        .onChange(of: isStreaming, initial: true) { _, streaming in
+            guard !userDecided else { return }
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                isExpanded = streaming
+            }
+        }
     }
 
-    public var body: some View {
+    private var title: String {
+        if isStreaming { return "Thinking…" }
+        guard let durationMs, durationMs > 0 else { return "Thought process" }
+        let seconds = Duration.milliseconds(durationMs)
+            .formatted(.units(allowed: [.seconds], width: .narrow, fractionalPart: .show(length: 1)))
+        return "Thought for \(seconds)"
+    }
+}
+
+/// A compact caption-sized row with a rotating chevron; the content slides in below.
+private struct ReasoningDisclosureStyle: DisclosureGroupStyle {
+    func makeBody(configuration: Configuration) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Button {
-                userDecided = true
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                    isOpen.toggle()
+                    configuration.isExpanded.toggle()
                 }
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
             } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: "brain.head.profile")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    Text(labelTitle)
+                    configuration.label
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
-                        .shimmer(active: isStreaming)
-
                     Image(systemName: "chevron.right")
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(.tertiary)
-                        .rotationEffect(.degrees(isOpen ? 90 : 0))
+                        .rotationEffect(.degrees(configuration.isExpanded ? 90 : 0))
                 }
             }
             .buttonStyle(.plain)
+            .accessibilityValue(configuration.isExpanded ? "Expanded" : "Collapsed")
 
-            if isOpen {
-                HStack(alignment: .top, spacing: 10) {
-                    RoundedRectangle(cornerRadius: 1)
-                        .fill(Color.primary.opacity(0.15))
-                        .frame(width: 2)
-
-                    Text(text)
-                        .font(.system(size: 13, design: .default))
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.leading, 2)
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-        }
-        .padding(.vertical, 4)
-        .onChange(of: isStreaming) { _, streaming in
-            if !userDecided {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                    isOpen = streaming
-                }
-            }
-        }
-        .onAppear {
-            if isStreaming && !userDecided {
-                isOpen = true
+            if configuration.isExpanded {
+                configuration.content
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
     }
+}
 
-    private var labelTitle: String {
-        if isStreaming {
-            return "Thinking…"
-        } else if let ms = durationMs, ms > 0 {
-            let seconds = String(format: "%.1f", Double(ms) / 1000.0)
-            return "Thought for \(seconds)s"
-        } else {
-            return "Thought process"
-        }
-    }
+extension DisclosureGroupStyle where Self == ReasoningDisclosureStyle {
+    fileprivate static var reasoning: ReasoningDisclosureStyle { ReasoningDisclosureStyle() }
 }

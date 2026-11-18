@@ -1,21 +1,22 @@
 import SwiftUI
 
 /// An attachment in the composer (`compact`) or in a sent message.
-public struct AttachmentCardView: View {
-    public let attachment: Attachment
-    public var compact: Bool
-    public var onRemove: (() -> Void)?
+struct AttachmentCardView: View {
+    let attachment: Attachment
+    var compact: Bool
+    var onRemove: (() -> Void)?
 
     @State private var thumbnail: UIImage?
     @Environment(\.displayScale) private var displayScale
+    @Environment(\.database) private var database
 
-    public init(attachment: Attachment, compact: Bool = false, onRemove: (() -> Void)? = nil) {
+    init(attachment: Attachment, compact: Bool = false, onRemove: (() -> Void)? = nil) {
         self.attachment = attachment
         self.compact = compact
         self.onRemove = onRemove
     }
 
-    public var body: some View {
+    var body: some View {
         Group {
             if attachment.kind == .image {
                 imageTile
@@ -44,8 +45,12 @@ public struct AttachmentCardView: View {
 
     private var imageSide: CGFloat { compact ? 60 : 180 }
 
-    private var imageTile: some View {
+    private var tileShape: RoundedRectangle {
         RoundedRectangle(cornerRadius: compact ? 12 : 18, style: .continuous)
+    }
+
+    private var imageTile: some View {
+        tileShape
             .fill(Color(uiColor: .tertiarySystemFill))
             .frame(width: imageSide, height: imageSide)
             .overlay {
@@ -58,12 +63,9 @@ public struct AttachmentCardView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: compact ? 12 : 18, style: .continuous))
-            .overlay(
-                // Keeps light images from dissolving into the background.
-                RoundedRectangle(cornerRadius: compact ? 12 : 18, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.1))
-            )
+            .clipShape(tileShape)
+            // Keeps light images from dissolving into the background.
+            .overlay(tileShape.strokeBorder(Color.primary.opacity(0.1)))
             .accessibilityLabel(attachment.filename)
     }
 
@@ -96,7 +98,7 @@ public struct AttachmentCardView: View {
     private func loadThumbnail() async {
         guard attachment.kind == .image, thumbnail == nil else { return }
         let data = attachment.data
-        let url = AppDatabase.shared.attachmentURL(id: attachment.id)
+        let url = database.attachmentURL(id: attachment.id)
         let side = imageSide * displayScale
         thumbnail = await Task.detached(priority: .utility) {
             let image = data.flatMap(UIImage.init(data:)) ?? UIImage(contentsOfFile: url.path)

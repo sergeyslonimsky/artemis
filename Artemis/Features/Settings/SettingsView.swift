@@ -1,15 +1,13 @@
 import SwiftUI
 
 /// Settings root: one row per area, each opening its own page.
-public struct SettingsView: View {
+struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var model = SettingsModel()
     @State private var onDeviceStatus = OnDeviceModelStatus.current
-    @State private var voiceLanguage = ""
+    @AppStorage(VoicePreferences.localeKey) private var voiceLocale = Locale.current.identifier
 
-    public init() {}
-
-    public var body: some View {
+    var body: some View {
         NavigationStack {
             Form {
                 Section {
@@ -26,7 +24,7 @@ public struct SettingsView: View {
                     NavigationLink {
                         RoutingSettingsView(model: model)
                     } label: {
-                        row("Routing", icon: "arrow.triangle.branch", color: .orange, value: routingSummary)
+                        row("Routing", icon: "arrow.triangle.branch", color: .orange, value: model.settings.routingMode.title)
                     }
                 } header: {
                     Text("Models")
@@ -59,7 +57,7 @@ public struct SettingsView: View {
                     NavigationLink {
                         VoiceSettingsView()
                     } label: {
-                        row("Voice & dictation", icon: "waveform", color: .pink, value: voiceLanguage)
+                        row("Voice & dictation", icon: "waveform", color: .pink, value: Locale(identifier: voiceLocale).displayName)
                     }
                 } header: {
                     Text("Device")
@@ -76,20 +74,12 @@ public struct SettingsView: View {
                     Button("Done") { dismiss() }
                 }
             }
-            .onAppear {
-                model.load()
-                onDeviceStatus = .current
-                voiceLanguage = VoiceSettingsView.currentLanguageName
-            }
-            .alert(
-                "Couldn't save",
-                isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })
-            ) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(model.errorMessage ?? "")
-            }
+            .onAppear { onDeviceStatus = .current }
+            .errorAlert("Couldn't save", message: $model.errorMessage)
         }
+        .task { await model.observeSettings() }
+        .task { await model.observeProviders() }
+        .task { await model.observePresets() }
     }
 
     private func row(_ title: String, icon: String, color: Color, value: String) -> some View {
@@ -104,7 +94,7 @@ public struct SettingsView: View {
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(.white)
                     .frame(width: 28, height: 28)
-                    .background(color.gradient, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .background(color.gradient, in: .rect(cornerRadius: 7, style: .continuous))
             }
         }
     }
@@ -112,14 +102,6 @@ public struct SettingsView: View {
     private var onDeviceSummary: String {
         guard onDeviceStatus.isAvailable else { return "Unavailable" }
         return model.settings.onDeviceEnabled ? "On" : "Off"
-    }
-
-    private var routingSummary: String {
-        switch model.settings.routingMode {
-        case .auto: "Auto"
-        case .onDevice: "On-device"
-        case .cloud: "Cloud"
-        }
     }
 
     private var toolsSummary: String {

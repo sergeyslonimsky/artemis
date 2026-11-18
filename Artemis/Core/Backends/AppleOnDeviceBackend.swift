@@ -4,9 +4,9 @@ import ImageIO
 import UniformTypeIdentifiers
 import os
 
-/// Failures of the on-device model, phrased for the user. The router (stage 3) uses
-/// them to decide whether to escalate to the cloud.
-public enum OnDeviceError: LocalizedError, Sendable, Equatable {
+/// Failures of the on-device model, phrased for the user. `ChatService` uses them to decide
+/// whether to escalate to the cloud.
+enum OnDeviceError: LocalizedError, Sendable, Equatable {
     case unavailable(OnDeviceModelStatus)
     case contextTooLong
     case unsupportedAttachment(String)
@@ -17,7 +17,7 @@ public enum OnDeviceError: LocalizedError, Sendable, Equatable {
     case timeout
     case failed(String)
 
-    public var errorDescription: String? {
+    var errorDescription: String? {
         switch self {
         case .unavailable(let status):
             status.detail
@@ -71,7 +71,7 @@ public enum OnDeviceError: LocalizedError, Sendable, Equatable {
 
 /// Apple's on-device model (Foundation Models). Each turn rebuilds a session from the chat
 /// history, trimmed from the oldest end to fit the model's context window.
-public struct AppleOnDeviceBackend: ChatBackend {
+struct AppleOnDeviceBackend: ChatBackend {
     /// Tokens kept free for the reply.
     static let maxResponseTokens = 1024
     /// Images don't go through `tokenCount`; reserve a conservative amount for each.
@@ -105,23 +105,19 @@ public struct AppleOnDeviceBackend: ChatBackend {
 
     private static let logger = Logger(subsystem: "com.artemis.ios", category: "AppleOnDeviceBackend")
 
-    public init() {}
+    init() {}
 
-    public var descriptor: BackendDescriptor {
+    var descriptor: BackendDescriptor {
         BackendDescriptor(kind: .onDevice)
     }
 
-    public func stream(_ turn: ChatTurn) -> AsyncThrowingStream<LLMEvent, Error> {
-        AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    try await Self.generate(turn, into: continuation)
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: Task.isCancelled ? CancellationError() : OnDeviceError.map(error))
-                }
+    func stream(_ turn: ChatTurn) -> AsyncThrowingStream<LLMEvent, Error> {
+        .task { continuation in
+            do {
+                try await Self.generate(turn, into: continuation)
+            } catch {
+                throw OnDeviceError.map(error)
             }
-            continuation.onTermination = { @Sendable _ in task.cancel() }
         }
     }
 
@@ -215,18 +211,17 @@ public struct AppleOnDeviceBackend: ChatBackend {
         let durationMs = max(1, Int(Date().timeIntervalSince(start) * 1000))
         let tokens = outputTokens.flatMap { $0 > 0 ? $0 : nil }
         continuation.yield(.done(
-            tokens: tokens ?? max(1, content.count / 4),
+            tokens: tokens ?? TokenEstimate.tokens(forCharacters: content.count),
             isEstimated: tokens == nil,
             durationMs: durationMs
         ))
     }
 
     private static func instructions(for turn: ChatTurn) -> String {
-        let custom = turn.preset?.systemPrompt.isEmpty == false ? turn.preset?.systemPrompt : turn.systemPrompt
+        let custom = Preset.effectiveSystemPrompt(preset: turn.preset, fallback: turn.systemPrompt)
         guard turn.usesAssistantPersona else { return custom ?? "" }
         let base = baseInstructions(tools: turn.toolGroups)
-        guard let custom, !custom.isEmpty else { return base }
-        return base + "\n\n" + custom
+        return custom.map { base + "\n\n" + $0 } ?? base
     }
 
     /// Instructions + as much recent history as fits next to the prompt and the reserved tokens.
@@ -276,31 +271,15 @@ public struct AppleOnDeviceBackend: ChatBackend {
         if let count = try? await model.tokenCount(for: entries) {
             return count
         }
-        let characters = entries.reduce(0) { total, entry in
-            total + textSegments(of: entry).reduce(0) { $0 + $1.count }
-        }
+        let characters = entries.reduce(0) { $0 + $1.text.count }
         return characters / 3 + 8
-    }
-
-    private static func textSegments(of entry: Transcript.Entry) -> [String] {
-        let segments: [Transcript.Segment]
-        switch entry {
-        case .instructions(let value): segments = value.segments
-        case .prompt(let value): segments = value.segments
-        case .response(let value): segments = value.segments
-        default: segments = []
-        }
-        return segments.compactMap { segment in
-            if case .text(let text) = segment { return text.content }
-            return nil
-        }
     }
 
     /// Past turns as text. Earlier attachments are only mentioned to save context.
     private static func historyEntry(for message: Message) -> Transcript.Entry? {
         var text = message.content
         for attachment in message.attachments {
-            text += "\n[Attached \(attachment.kind == .image ? "image" : "file"): \(attachment.filename)]"
+            text += "\n[Attached \(attachment.kindLabel.lowercased()): \(attachment.filename)]"
         }
         guard !text.isEmpty else { return nil }
         let segments: [Transcript.Segment] = [.text(.init(content: text))]
@@ -318,10 +297,7 @@ public struct AppleOnDeviceBackend: ChatBackend {
     private static func reasoningText(in entries: ArraySlice<Transcript.Entry>) -> String {
         entries.compactMap { entry -> String? in
             guard case .reasoning(let reasoning) = entry else { return nil }
-            return reasoning.segments.compactMap { segment in
-                if case .text(let text) = segment { return text.content }
-                return nil
-            }.joined()
+            return reasoning.segments.text
         }.joined(separator: "\n")
     }
 
@@ -388,8 +364,6 @@ private struct PromptParts {
 
         for attachment in message.attachments {
             guard let data = attachment.data else { continue }
-            let type = UTType(mimeType: attachment.mime) ?? .data
-
             if attachment.kind == .image {
                 guard let source = CGImageSourceCreateWithData(data as CFData, nil),
                       let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
@@ -406,10 +380,10 @@ private struct PromptParts {
                         \"\"\"
                         """
                 }
-            } else if type.conforms(to: .text) || type.conforms(to: .json), let body = String(data: data, encoding: .utf8) {
+            } else if let body = attachment.text {
                 text += "\n\nFile: \(attachment.filename)\n```\n\(body)\n```"
-            } else if try await model.supportsDataAttachmentType(type) {
-                files.append(RawDataAttachment(contentType: type, content: data))
+            } else if try await model.supportsDataAttachmentType(attachment.contentType) {
+                files.append(RawDataAttachment(contentType: attachment.contentType, content: data))
             } else {
                 throw OnDeviceError.unsupportedAttachment(attachment.filename)
             }
@@ -445,5 +419,29 @@ private struct RawDataAttachment: DataAttachmentRepresentable {
 
     var transcriptRepresentation: Transcript.DataAttachment {
         Transcript.DataAttachment(contentType: contentType, content: content)
+    }
+}
+
+// MARK: - Transcript text
+
+private extension Array where Element == Transcript.Segment {
+    /// The text segments joined; images and other segments are skipped.
+    var text: String {
+        compactMap { segment in
+            if case .text(let text) = segment { return text.content }
+            return nil
+        }.joined()
+    }
+}
+
+private extension Transcript.Entry {
+    /// Text of instructions, prompts and responses; empty for other entries.
+    var text: String {
+        switch self {
+        case .instructions(let value): value.segments.text
+        case .prompt(let value): value.segments.text
+        case .response(let value): value.segments.text
+        default: ""
+        }
     }
 }

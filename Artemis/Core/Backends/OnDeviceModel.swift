@@ -2,13 +2,13 @@ import Foundation
 import FoundationModels
 
 /// User-facing state of Apple's on-device model.
-public enum OnDeviceModelStatus: Equatable, Sendable {
+enum OnDeviceModelStatus: Equatable, Sendable {
     case available
     case deviceNotEligible
     case appleIntelligenceNotEnabled
     case modelNotReady
 
-    public static var current: OnDeviceModelStatus {
+    static var current: OnDeviceModelStatus {
         switch SystemLanguageModel.default.availability {
         case .available:
             return .available
@@ -23,9 +23,9 @@ public enum OnDeviceModelStatus: Equatable, Sendable {
         }
     }
 
-    public var isAvailable: Bool { self == .available }
+    var isAvailable: Bool { self == .available }
 
-    public var title: String {
+    var title: String {
         switch self {
         case .available: "Available"
         case .deviceNotEligible: "Not supported on this device"
@@ -34,7 +34,7 @@ public enum OnDeviceModelStatus: Equatable, Sendable {
         }
     }
 
-    public var detail: String {
+    var detail: String {
         switch self {
         case .available:
             "Replies are generated privately on this device."
@@ -49,20 +49,11 @@ public enum OnDeviceModelStatus: Equatable, Sendable {
 }
 
 /// Entry points for the on-device model that don't need a session.
-public enum OnDeviceModel {
-    /// Display names of the languages the model supports, sorted.
-    public static var supportedLanguageNames: [String] {
+enum OnDeviceModel {
+    /// Display names of the languages the model supports ("English (United Kingdom)"), sorted.
+    static var supportedLanguageNames: [String] {
         SystemLanguageModel.default.supportedLanguages
-            .compactMap { language in
-                language.languageCode.flatMap { Locale.current.localizedString(forLanguageCode: $0.identifier) }
-                    .map { name in
-                        guard let region = language.region,
-                              let regionName = Locale.current.localizedString(forRegionCode: region.identifier) else {
-                            return name
-                        }
-                        return "\(name) (\(regionName))"
-                    }
-            }
+            .compactMap(\.displayName)
             .sorted()
     }
 
@@ -71,10 +62,17 @@ public enum OnDeviceModel {
     /// Loads the model into memory ahead of the first request. Repeated calls within a short
     /// window are ignored (focus can toggle often).
     @MainActor
-    public static func prewarm() {
+    static func prewarm() {
         guard OnDeviceModelStatus.current.isAvailable else { return }
         if let lastPrewarm, Date().timeIntervalSince(lastPrewarm) < 30 { return }
         lastPrewarm = Date()
         LanguageModelSession(instructions: AppleOnDeviceBackend.baseInstructions()).prewarm()
+    }
+}
+
+extension AppSettings {
+    /// The on-device model is switched on and the system can run it right now.
+    var isOnDeviceUsable: Bool {
+        onDeviceEnabled && OnDeviceModelStatus.current.isAvailable
     }
 }

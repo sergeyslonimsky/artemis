@@ -68,6 +68,11 @@ struct VoiceModeView: View {
             await session.start()
             locales = await VoiceSession.suggestedLocales(current: session.locale)
         }
+        .sheet(item: $session.draftSheet) { sheet in
+            DraftSheetView(sheet: sheet) { completed in
+                session.finishDraftSheet(sheet, completed: completed)
+            }
+        }
         .onDisappear {
             Task { await session.stop() }
         }
@@ -90,7 +95,14 @@ struct VoiceModeView: View {
     private var captionText: some View {
         switch session.state {
         case .failed(let message):
-            Text(message).foregroundStyle(.secondary)
+            VStack(spacing: 16) {
+                Text(message).foregroundStyle(.secondary)
+                if VoicePreferences.isMicrophoneDenied {
+                    OpenSettingsButton()
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.capsule)
+                }
+            }
         case .speaking, .needsConsent:
             Text(session.transcript.isEmpty ? session.spokenReply : session.transcript)
                 .foregroundStyle(session.transcript.isEmpty ? .primary : .secondary)
@@ -105,61 +117,62 @@ struct VoiceModeView: View {
     // MARK: - Controls
 
     private var controls: some View {
-        HStack(spacing: 48) {
-            Button {
-                session.isMuted.toggle()
-            } label: {
-                Image(systemName: session.isMuted ? "mic.slash.fill" : "mic.fill")
-                    .font(.title2)
-                    .foregroundStyle(session.isMuted ? Color(uiColor: .systemBackground) : .primary)
-                    .frame(width: 64, height: 64)
-                    .background(session.isMuted ? Color.primary : Color(uiColor: .secondarySystemBackground), in: Circle())
-            }
-            .accessibilityLabel(session.isMuted ? "Unmute" : "Mute")
+        GlassEffectContainer(spacing: 48) {
+            HStack(spacing: 48) {
+                controlButton(
+                    session.isMuted ? "Unmute" : "Mute",
+                    systemImage: session.isMuted ? "mic.slash.fill" : "mic.fill",
+                    foreground: session.isMuted ? Color(uiColor: .systemBackground) : .primary,
+                    tint: session.isMuted ? .primary : nil
+                ) {
+                    session.isMuted.toggle()
+                }
 
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 64, height: 64)
-                    .background(Color.red, in: Circle())
+                controlButton("End voice mode", systemImage: "xmark", foreground: .white, tint: .red) {
+                    dismiss()
+                }
             }
-            .accessibilityLabel("End voice mode")
+        }
+        .sensoryFeedback(.selection, trigger: session.isMuted)
+    }
+
+    /// A 64-pt glass circle; both controls share it so they line up exactly.
+    private func controlButton(
+        _ title: LocalizedStringKey,
+        systemImage: String,
+        foreground: Color,
+        tint: Color?,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .labelStyle(.iconOnly)
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(foreground)
+                .frame(width: 64, height: 64)
+                .glassEffect(.regular.tint(tint).interactive(), in: .circle)
         }
         .buttonStyle(.plain)
-        .sensoryFeedback(.selection, trigger: session.isMuted)
     }
 
     private var languageMenu: some View {
         Menu {
-            ForEach(locales, id: \.identifier) { locale in
-                Button {
-                    Task {
-                        await session.setLocale(locale)
-                    }
-                } label: {
-                    if locale.identifier == session.locale.identifier {
-                        Label(VoiceSession.name(of: locale), systemImage: "checkmark")
-                    } else {
-                        Text(VoiceSession.name(of: locale))
-                    }
+            Picker("Spoken language", selection: Binding(
+                get: { session.locale.identifier },
+                set: { identifier in
+                    guard let locale = locales.first(where: { $0.identifier == identifier }) else { return }
+                    Task { await session.setLocale(locale) }
+                }
+            )) {
+                ForEach(locales, id: \.identifier) { locale in
+                    Text(locale.displayName).tag(locale.identifier)
                 }
             }
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "globe")
-                Text(VoiceSession.name(of: session.locale))
-                Image(systemName: "chevron.down")
-                    .font(.caption2.weight(.bold))
-            }
-            .font(.subheadline.weight(.medium))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color(uiColor: .secondarySystemBackground), in: Capsule())
+            Label(session.locale.displayName, systemImage: "globe")
+                .font(.subheadline.weight(.medium))
         }
+        .buttonStyle(.glass)
         .accessibilityLabel("Spoken language")
     }
 
@@ -177,8 +190,7 @@ struct VoiceModeView: View {
             }
             .buttonBorderShape(.capsule)
         }
-        .padding(16)
-        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .cardBackground()
     }
 }
 
@@ -189,16 +201,8 @@ private struct VoiceDraftCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 12) {
-                Image(systemName: DraftPresentation.icon(for: draft))
-                    .font(.title3)
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 40, height: 40)
-                    .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(draft.title).font(.subheadline.weight(.semibold))
-                    Text(DraftPresentation.detail(for: draft)).font(.caption).foregroundStyle(.secondary)
-                }
+            HStack {
+                DraftSummary(draft: draft)
                 Spacer(minLength: 0)
             }
             HStack {
@@ -208,13 +212,12 @@ private struct VoiceDraftCard: View {
                 Text("or say “yes”")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Button(DraftPresentation.confirmTitle(for: draft)) { onDecision(true) }
+                Button(draft.kind.confirmTitle) { onDecision(true) }
                     .buttonStyle(.borderedProminent)
             }
             .buttonBorderShape(.capsule)
         }
-        .padding(16)
-        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .cardBackground()
     }
 }
 

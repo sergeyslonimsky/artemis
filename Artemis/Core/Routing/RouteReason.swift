@@ -1,7 +1,7 @@
 import Foundation
 
 /// Why a reply went to the backend it did. Persisted in `messages.route_reason`.
-public enum RouteReason: String, Codable, Sendable {
+enum RouteReason: String, Codable, Sendable {
     // Explicit user choices
     case userSelectedOnDevice = "user_on_device"
     case userSelectedCloud = "user_cloud"
@@ -40,7 +40,7 @@ public enum RouteReason: String, Codable, Sendable {
 
     /// The request would be better served by the cloud. On-device replies with such a reason
     /// were kept local only because the cloud was denied, declined or not configured.
-    public var prefersCloud: Bool {
+    var prefersCloud: Bool {
         switch self {
         case .userAskedCloud, .userSelectedCloud, .unsupportedAttachment, .unsupportedLanguage,
              .longInput, .onDeviceUnavailable, .freshInformation, .complexReasoning, .math, .code, .longForm,
@@ -53,24 +53,18 @@ public enum RouteReason: String, Codable, Sendable {
     }
 
     /// On-device tools the reply may use.
-    public var toolGroups: Set<ToolGroup> {
-        switch self {
-        case .personalData: [.schedule]
-        case .contacts: [.contacts]
-        case .alarm: [.alarms]
-        case .weather: [.weather]
-        case .places: [.places]
-        case .health: [.health]
-        // The user picked the on-device model for everything, so it gets every tool.
-        case .userSelectedOnDevice: Set(ToolGroup.allCases)
-        // The cloud was preferred but denied or declined: the on-device model gets every tool,
-        // which may still answer (e.g. weather when the cloud would have searched the web).
-        default: prefersCloud ? Set(ToolGroup.allCases) : []
+    var toolGroups: Set<ToolGroup> {
+        if let group = ToolGroup.allCases.first(where: { $0.routeReason == self }) {
+            return [group]
         }
+        // The user picked the on-device model for everything, so it gets every tool. When the cloud
+        // was preferred but denied or declined, every tool may still help (e.g. weather instead of
+        // a web search).
+        return self == .userSelectedOnDevice || prefersCloud ? Set(ToolGroup.allCases) : []
     }
 
     /// The request is about the user's own data: the reply stays on the device and isn't escalated.
-    public var keepsDataOnDevice: Bool {
+    var keepsDataOnDevice: Bool {
         switch self {
         case .personalData, .contacts, .alarm, .places, .health: true
         default: false
@@ -78,7 +72,7 @@ public enum RouteReason: String, Codable, Sendable {
     }
 
     /// Short explanation shown to the user ("Sent to the cloud: …" / "Answered on-device: …").
-    public var explanation: String {
+    var explanation: String {
         switch self {
         case .userSelectedOnDevice: "you chose the on-device model"
         case .userSelectedCloud: "you chose a cloud model"
@@ -111,15 +105,15 @@ public enum RouteReason: String, Codable, Sendable {
 }
 
 /// Router output for one turn.
-public struct RouteDecision: Equatable, Sendable {
-    public var backend: BackendKind
-    public var reason: RouteReason
+struct RouteDecision: Equatable, Sendable {
+    var backend: BackendKind
+    var reason: RouteReason
 
-    public static func onDevice(_ reason: RouteReason) -> RouteDecision {
+    static func onDevice(_ reason: RouteReason) -> RouteDecision {
         RouteDecision(backend: .onDevice, reason: reason)
     }
 
-    public static func cloud(_ reason: RouteReason) -> RouteDecision {
+    static func cloud(_ reason: RouteReason) -> RouteDecision {
         RouteDecision(backend: .cloud, reason: reason)
     }
 }

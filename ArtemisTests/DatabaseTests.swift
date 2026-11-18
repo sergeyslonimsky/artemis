@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import Testing
 @testable import Artemis
 
@@ -82,5 +83,38 @@ struct DatabaseTests {
         try database.createChat(title: "B", providerId: "p", model: "new", now: Date(timeIntervalSince1970: 200))
         try database.createChat(title: "C")
         #expect(try database.recentModels() == [ModelRef(providerId: "p", model: "new"), ModelRef(providerId: "p", model: "old")])
+    }
+
+    @Test func toolGroupListMigratesFromCSV() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue, upTo: "v14_favorite_models")
+        try queue.write { db in
+            try db.execute(sql: "UPDATE settings SET disabled_tool_groups = 'health,contacts' WHERE id = 1")
+        }
+        let attachments = FileManager.default.temporaryDirectory.appending(path: "artemis-tests-\(UUID().uuidString)")
+        let database = try AppDatabase(queue, attachmentsDirectory: attachments, apiKeys: InMemoryAPIKeyStore())
+
+        #expect(try database.fetchSettings().disabledToolGroups == [.health, .contacts])
+    }
+
+    @Test func searchReturnsWholeChats() throws {
+        let database = try makeDatabase()
+        let chat = try database.createChat(title: "Trip", routingMode: .cloud, providerId: nil, model: "m")
+        try database.addMessage(Message(chatId: chat.id, role: .user, content: "Pack the umbrella for Paris"))
+
+        let hit = try #require(try database.search(query: "umbrella").first)
+        #expect(hit.chat.id == chat.id)
+        #expect(hit.chat.routingMode == .cloud)
+        #expect(hit.chat.model == "m")
+        #expect(hit.snippet.contains("umbrella"))
+    }
+
+    @Test func generatedTitleNeverReplacesAManualOne() throws {
+        let database = try makeDatabase()
+        let chat = try database.createChat(title: "New Chat")
+        try database.renameChat(chatId: chat.id, title: "Mine")
+
+        #expect(try !database.setGeneratedTitle(chatId: chat.id, title: "Generated"))
+        #expect(try database.fetchChat(id: chat.id)?.title == "Mine")
     }
 }
