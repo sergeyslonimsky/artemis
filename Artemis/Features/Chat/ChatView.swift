@@ -179,7 +179,7 @@ public struct ChatView: View {
         let canAct = message.role == .assistant && !isBusy
         // Replies built on calendar/reminders aren't offered to the cloud: it would only see a redaction.
         let canAskCloud = canAct && message.backend == .onDevice && cloudTarget != nil
-            && message.extras.personalDataUsed.isEmpty
+            && !message.extras.usedPrivateData
         return MessageBubbleView(
             message: message,
             live: chatService.liveState(chatId: chatId, messageId: message.id),
@@ -375,7 +375,7 @@ public struct ChatView: View {
         }
     }
 
-    /// Saves a drafted event/reminder to EventKit only after the user taps Add.
+    /// Carries out a drafted action only after the user confirms it.
     private func resolveDraft(_ draft: ActionDraft, in message: Message, confirm: Bool) {
         guard confirm else {
             try? database.setDraftStatus(messageId: message.id, draftId: draft.id, status: .dismissed)
@@ -383,7 +383,7 @@ public struct ChatView: View {
         }
         Task {
             do {
-                try await PersonalDataStore.shared.save(draft)
+                try await DraftPerformer.perform(draft)
                 try database.setDraftStatus(messageId: message.id, draftId: draft.id, status: .added)
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
             } catch {

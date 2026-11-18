@@ -72,12 +72,18 @@ public struct SettingsView: View {
                         .disabled(!onDeviceStatus.isAvailable)
                     Toggle("Generate chat titles on-device", isOn: settingBinding(\.onDeviceTitles))
                         .disabled(!onDeviceStatus.isAvailable || !settings.onDeviceEnabled)
-                    Toggle("Calendar & Reminders", isOn: settingBinding(\.personalDataTools))
-                        .disabled(!onDeviceStatus.isAvailable || !settings.onDeviceEnabled)
+                    NavigationLink {
+                        toolsSettings
+                    } label: {
+                        LabeledContent("Device data & actions") {
+                            Text(toolsSummary)
+                        }
+                    }
+                    .disabled(!onDeviceStatus.isAvailable || !settings.onDeviceEnabled)
                 } header: {
                     Text("On-device model")
                 } footer: {
-                    Text(onDeviceStatus.detail + " With Calendar & Reminders on, it can read your schedule and draft events or reminders you confirm — this data never leaves the device.")
+                    Text(onDeviceStatus.detail)
                 }
 
                 Section {
@@ -155,6 +161,54 @@ public struct SettingsView: View {
             base = "Auto mode never sends messages to the cloud; the on-device model always answers."
         }
         return base + " Choosing Cloud mode or tapping Ask cloud always uses the cloud."
+    }
+
+    private var toolsSummary: String {
+        let count = settings.enabledToolGroups.count
+        return count == 0 ? "Off" : count == ToolGroup.allCases.count ? "All" : "\(count) of \(ToolGroup.allCases.count)"
+    }
+
+    private var toolsSettings: some View {
+        Form {
+            Section {
+                Toggle("Use device data & actions", isOn: settingBinding(\.personalDataTools))
+            } footer: {
+                Text("The on-device model can read this data to answer you and draft actions such as events, alarms or messages. Nothing is saved or sent until you confirm it, and the data never leaves this device.")
+            }
+            Section("Sources") {
+                ForEach(ToolGroup.allCases) { group in
+                    Toggle(isOn: toolGroupBinding(group)) {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(group.title)
+                                Text(group.detail)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: group.systemImage)
+                        }
+                    }
+                }
+            }
+            .disabled(!settings.personalDataTools)
+        }
+        .navigationTitle("Device data & actions")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func toolGroupBinding(_ group: ToolGroup) -> Binding<Bool> {
+        Binding(
+            get: { !settings.disabledToolGroups.contains(group) },
+            set: { isOn in
+                if isOn {
+                    settings.disabledToolGroups.remove(group)
+                } else {
+                    settings.disabledToolGroups.insert(group)
+                }
+                try? database.saveSettings(settings)
+            }
+        )
     }
 
     private func settingBinding<Value>(_ keyPath: WritableKeyPath<AppSettings, Value>) -> Binding<Value> {

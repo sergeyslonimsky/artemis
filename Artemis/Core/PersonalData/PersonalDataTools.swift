@@ -24,16 +24,51 @@ final class ToolEventSink: @unchecked Sendable {
 }
 
 enum PersonalDataTools {
-    static func all(sink: ToolEventSink) -> [any Tool] {
-        [CalendarEventsTool(sink: sink), RemindersTool(sink: sink), DraftEventOrReminderTool(sink: sink)]
+    static func tools(for groups: Set<ToolGroup>, sink: ToolEventSink) -> [any Tool] {
+        ToolGroup.allCases.filter(groups.contains).flatMap { group -> [any Tool] in
+            switch group {
+            case .schedule:
+                [CalendarEventsTool(sink: sink), RemindersTool(sink: sink), DraftEventOrReminderTool(sink: sink)]
+            case .contacts:
+                [FindContactTool(sink: sink), DraftContactActionTool(sink: sink)]
+            case .alarms:
+                [DraftAlarmTool(sink: sink)]
+            case .weather:
+                [WeatherTool(sink: sink)]
+            case .places:
+                [CurrentLocationTool(sink: sink), SearchPlacesTool(sink: sink)]
+            case .health:
+                [HealthDataTool(sink: sink)]
+            }
+        }
     }
 
-    /// Added to the instructions when the tools are on.
-    static let instructions = """
-        You can look up the user's calendar events and open reminders with your tools; use them whenever \
-        the user asks about their schedule, plans or to-dos. You can't save anything yourself: to add an \
-        event or a reminder, call draftEventOrReminder, then tell the user to confirm it below your reply.
-        """
+    /// Added to the instructions for the turn's tools.
+    static func instructions(for groups: Set<ToolGroup>) -> String {
+        var lines = ToolGroup.allCases.filter(groups.contains).map { group in
+            switch group {
+            case .schedule:
+                "Use your tools to look up the user's calendar events and open reminders whenever they ask "
+                    + "about their schedule, plans or to-dos. To add an event or a reminder, call draftEventOrReminder."
+            case .contacts:
+                "Use findContact to look up people in the user's contacts. To call, text or email someone, "
+                    + "call draftContactAction."
+            case .alarms:
+                "To set an alarm or a timer, call draftAlarm."
+            case .weather:
+                "Use getWeather for the weather and forecast; leave the place empty for the user's location."
+            case .places:
+                "Use getCurrentLocation for where the user is, and searchPlaces to find places."
+            case .health:
+                "Use getHealthData to read the user's activity, sleep and health data."
+            }
+        }
+        if groups.contains(where: { [.schedule, .contacts, .alarms].contains($0) }) {
+            lines.append("You can't do these things yourself: drafts appear below your reply and nothing happens "
+                + "until the user confirms, so tell them to confirm it.")
+        }
+        return lines.joined(separator: "\n")
+    }
 
     /// Parses `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM` in the user's time zone.
     static func parseDate(_ text: String) -> (date: Date, hasTime: Bool)? {

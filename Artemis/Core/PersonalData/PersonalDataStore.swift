@@ -29,7 +29,7 @@ public actor PersonalDataStore {
             switch self {
             case .accessDenied(.calendar):
                 "Artemis doesn't have access to your calendar. You can allow it in Settings › Privacy & Security › Calendars."
-            case .accessDenied(.reminders):
+            case .accessDenied:
                 "Artemis doesn't have access to your reminders. You can allow it in Settings › Privacy & Security › Reminders."
             }
         }
@@ -131,6 +131,9 @@ public actor PersonalDataStore {
                 reminder.addAlarm(EKAlarm(absoluteDate: draft.date))
             }
             try store.save(reminder, commit: true)
+
+        case .alarm, .timer, .call, .message, .email:
+            preconditionFailure("Not an EventKit draft: \(draft.kind)")
         }
     }
 }

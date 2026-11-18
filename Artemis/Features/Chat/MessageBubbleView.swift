@@ -156,10 +156,9 @@ public struct MessageBubbleView: View {
             }
 
             if !isStreaming, !message.extras.personalDataUsed.isEmpty {
-                HStack(spacing: 12) {
-                    ForEach(message.extras.personalDataUsed, id: \.self) { source in
-                        Label(source.usedLabel, systemImage: source.systemImage)
-                    }
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) { usedDataLabels }
+                    VStack(alignment: .leading, spacing: 4) { usedDataLabels }
                 }
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -184,6 +183,18 @@ public struct MessageBubbleView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var usedDataLabels: some View {
+        ForEach(message.extras.personalDataUsed, id: \.self) { source in
+            Label(source.usedLabel, systemImage: source.systemImage)
+        }
+        // Open-Meteo's license (CC BY 4.0) asks for attribution.
+        if message.extras.personalDataUsed.contains(.weather) {
+            Link("Weather data by Open-Meteo", destination: OpenMeteo.attributionURL)
+                .underline()
+        }
     }
 
     @ViewBuilder
@@ -308,7 +319,7 @@ private struct DraftCard: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
-            Image(systemName: draft.kind == .event ? "calendar.badge.plus" : "checklist")
+            Image(systemName: icon)
                 .font(.title3)
                 .foregroundStyle(Color.accentColor)
                 .frame(width: 40, height: 40)
@@ -318,9 +329,15 @@ private struct DraftCard: View {
                 Text(draft.title)
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(2)
-                Text(whenText)
+                Text(detailText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if let body = draft.body, !body.isEmpty {
+                    Text("“\(body)”")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                }
             }
 
             Spacer(minLength: 8)
@@ -328,7 +345,7 @@ private struct DraftCard: View {
             switch draft.status {
             case .pending:
                 VStack(spacing: 6) {
-                    Button(draft.kind == .event ? "Add" : "Remind") { onDecision(true) }
+                    Button(confirmTitle) { onDecision(true) }
                         .buttonStyle(.borderedProminent)
                     Button("Dismiss") { onDecision(false) }
                         .font(.caption)
@@ -338,7 +355,7 @@ private struct DraftCard: View {
                 .controlSize(.small)
                 .buttonBorderShape(.capsule)
             case .added:
-                Label("Added", systemImage: "checkmark.circle.fill")
+                Label(doneTitle, systemImage: "checkmark.circle.fill")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.green)
             case .dismissed:
@@ -351,17 +368,65 @@ private struct DraftCard: View {
         .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
-    private var whenText: String {
-        let kind = draft.kind == .event ? "Event" : "Reminder"
-        guard draft.hasTime else {
-            return "\(kind) · \(draft.date.formatted(.dateTime.weekday(.wide).day().month(.wide)))"
+    private var icon: String {
+        switch draft.kind {
+        case .event: "calendar.badge.plus"
+        case .reminder: "checklist"
+        case .alarm: "alarm"
+        case .timer: "timer"
+        case .call: "phone"
+        case .message: "message"
+        case .email: "envelope"
         }
-        var text = "\(kind) · \(draft.date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).hour().minute()))"
-        if draft.kind == .event, draft.durationMinutes > 0 {
-            let end = draft.date.addingTimeInterval(TimeInterval(draft.durationMinutes * 60))
-            text += "–" + end.formatted(date: .omitted, time: .shortened)
+    }
+
+    private var confirmTitle: String {
+        switch draft.kind {
+        case .event: "Add"
+        case .reminder: "Remind"
+        case .alarm, .timer: "Set"
+        case .call: "Call"
+        case .message, .email: "Write"
         }
-        return text
+    }
+
+    private var doneTitle: String {
+        switch draft.kind {
+        case .event, .reminder: "Added"
+        case .alarm, .timer: "Set"
+        case .call: "Called"
+        case .message, .email: "Opened"
+        }
+    }
+
+    private var detailText: String {
+        switch draft.kind {
+        case .event, .reminder:
+            let kind = draft.kind == .event ? "Event" : "Reminder"
+            guard draft.hasTime else {
+                return "\(kind) · \(draft.date.formatted(.dateTime.weekday(.wide).day().month(.wide)))"
+            }
+            var text = "\(kind) · \(draft.date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).hour().minute()))"
+            if draft.kind == .event, draft.durationMinutes > 0 {
+                let end = draft.date.addingTimeInterval(TimeInterval(draft.durationMinutes * 60))
+                text += "–" + end.formatted(date: .omitted, time: .shortened)
+            }
+            return text
+        case .alarm:
+            let day = Calendar.current.isDateInToday(draft.date) ? "Today"
+                : Calendar.current.isDateInTomorrow(draft.date) ? "Tomorrow"
+                : draft.date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
+            return "Alarm · \(day), \(draft.date.formatted(date: .omitted, time: .shortened))"
+        case .timer:
+            let length = Duration.seconds(draft.durationMinutes * 60).formatted(.units(allowed: [.hours, .minutes], width: .wide))
+            return "Timer · \(length)"
+        case .call:
+            return "Call · \(draft.address ?? "")"
+        case .message:
+            return "Message · \(draft.address ?? "")"
+        case .email:
+            return "Email · \(draft.address ?? "")"
+        }
     }
 }
 

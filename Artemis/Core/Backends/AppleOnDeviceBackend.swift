@@ -80,11 +80,14 @@ public struct AppleOnDeviceBackend: ChatBackend {
     /// A small model doesn't know where it runs and borrows capabilities from bigger assistants,
     /// so its limits are stated once, calmly, after what it can do: a long list of "can't"s up
     /// front made it refuse things it handles well (e.g. describing an image).
-    static func baseInstructions(now: Date = Date(), personalData: Bool = false) -> String {
+    static func baseInstructions(now: Date = Date(), tools: Set<ToolGroup> = []) -> String {
         let today = now.formatted(.dateTime.weekday(.wide).day().month(.wide).year())
-        let actions = personalData
-            ? "setting alarms, sending messages, or making calls"
-            : "setting alarms or reminders, sending messages, or making calls"
+        var missing: [String] = []
+        if !tools.contains(.alarms) { missing.append("setting alarms") }
+        if !tools.contains(.schedule) { missing.append("adding reminders") }
+        if !tools.contains(.contacts) { missing.append("sending messages or making calls") }
+        let actions = missing.isEmpty ? "changing settings or controlling other apps" : missing.joined(separator: ", ")
+        let internet = tools.contains(.weather) ? "no internet access (except the weather tool)" : "no internet access"
         let base = """
             You are Artemis, a helpful assistant running on the user's iPhone. Today is \(today).
 
@@ -92,12 +95,12 @@ public struct AppleOnDeviceBackend: ChatBackend {
             write and edit text, translate, and summarize. Answer directly and helpfully, using Markdown \
             when it helps.
 
-            You have no internet access and can't take actions on the device, such as \(actions). \
+            You have \(internet) and can't take actions on the device, such as \(actions). \
             Only when a request truly depends on one of these, say in one short sentence that you can't do \
             that part, then help with everything else. Don't mention other models or services. \
             If you're unsure about a fact, say so briefly.
             """
-        return personalData ? base + "\n\n" + PersonalDataTools.instructions : base
+        return tools.isEmpty ? base : base + "\n\n" + PersonalDataTools.instructions(for: tools)
     }
 
     private static let logger = Logger(subsystem: "com.artemis.ios", category: "AppleOnDeviceBackend")
@@ -133,7 +136,7 @@ public struct AppleOnDeviceBackend: ChatBackend {
             throw OnDeviceError.failed("There is no message to answer.")
         }
 
-        let request = try await PromptParts(message: last, model: model, includesTime: turn.allowsPersonalData)
+        let request = try await PromptParts(message: last, model: model, includesTime: !turn.toolGroups.isEmpty)
         let responseBudget = min(maxResponseTokens, model.contextSize / 4)
         let reservedTokens = responseBudget + request.images.count * estimatedTokensPerImage
         let instructions = instructions(for: turn)
@@ -154,7 +157,7 @@ public struct AppleOnDeviceBackend: ChatBackend {
             sink = cached.sink
         } else {
             sink = ToolEventSink()
-            let tools = turn.allowsPersonalData ? PersonalDataTools.all(sink: sink) : []
+            let tools = PersonalDataTools.tools(for: turn.toolGroups, sink: sink)
             let transcript = try await buildTranscript(
                 instructions: instructions,
                 history: history,
@@ -221,7 +224,7 @@ public struct AppleOnDeviceBackend: ChatBackend {
     private static func instructions(for turn: ChatTurn) -> String {
         let custom = turn.preset?.systemPrompt.isEmpty == false ? turn.preset?.systemPrompt : turn.systemPrompt
         guard turn.usesAssistantPersona else { return custom ?? "" }
-        let base = baseInstructions(personalData: turn.allowsPersonalData)
+        let base = baseInstructions(tools: turn.toolGroups)
         guard let custom, !custom.isEmpty else { return base }
         return base + "\n\n" + custom
     }

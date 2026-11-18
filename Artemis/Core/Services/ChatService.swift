@@ -170,7 +170,8 @@ public final class ChatService {
         case .proceed(let decision):
             // Escalating is pointless when the cloud model is why the turn stayed local, or when the
             // turn is about personal data the cloud can't see.
-            let mayEscalate = route.mode == .auto && ![.cloudCantReadAttachment, .personalData].contains(decision.reason)
+            let mayEscalate = route.mode == .auto && decision.reason != .cloudCantReadAttachment
+                && !decision.reason.keepsDataOnDevice
             await reply(chatId: chatId, token: token, decision: decision, route: route, preset: preset, mayEscalate: mayEscalate)
         case .keepOnDevice(let reason):
             await reply(chatId: chatId, token: token, decision: .onDevice(reason), route: route, preset: preset, mayEscalate: false)
@@ -215,7 +216,10 @@ public final class ChatService {
         runs[chatId]?.content = ""
         runs[chatId]?.reasoning = ""
 
-        let job = ReplyJob(database: database, chatId: chatId, messageId: placeholder.id, backend: backend, preset: preset)
+        let job = ReplyJob(
+            database: database, chatId: chatId, messageId: placeholder.id, backend: backend, preset: preset,
+            toolGroups: decision.reason.toolGroups
+        )
         let outcome = await job.run(
             onBatch: { [weak self] batch in
                 await self?.apply(batch, chatId: chatId, token: token)
@@ -226,7 +230,7 @@ public final class ChatService {
         )
         guard isCurrent(chatId: chatId, token: token) else { return }
 
-        if mayEscalate, decision.backend == .onDevice, route.cloud != nil, outcome.extras.personalDataUsed.isEmpty, !Task.isCancelled {
+        if mayEscalate, decision.backend == .onDevice, route.cloud != nil, !outcome.extras.usedPrivateData, !Task.isCancelled {
             var escalationReason: RouteReason?
             if outcome.onDeviceError != nil {
                 escalationReason = .onDeviceFailed
@@ -313,7 +317,8 @@ public final class ChatService {
             mode: route.mode,
             onDeviceUsable: settings.onDeviceEnabled && OnDeviceModelStatus.current.isAvailable,
             hasCloud: route.cloud != nil,
-            cloudCapabilities: route.cloud.map { $0.provider.capabilities(for: $0.model) }
+            cloudCapabilities: route.cloud.map { $0.provider.capabilities(for: $0.model) },
+            availableTools: settings.enabledToolGroups
         )
     }
 
@@ -423,6 +428,8 @@ struct ReplyJob: Sendable {
     let messageId: String
     let backend: any ChatBackend
     let preset: Preset?
+    /// On-device tools the route allows; narrowed further by the settings.
+    var toolGroups: Set<ToolGroup> = []
 
     private static let logger = Logger(subsystem: "com.artemis.ios", category: "ReplyJob")
 
@@ -445,7 +452,7 @@ struct ReplyJob: Sendable {
             var turn = ChatTurn(messages: history, systemPrompt: settings.systemPrompt, preset: preset)
             turn.conversationId = chatId
             turn.replyId = messageId
-            turn.allowsPersonalData = !isCloud && settings.personalDataTools
+            turn.toolGroups = isCloud ? [] : toolGroups.intersection(settings.enabledToolGroups)
 
             for try await event in backend.stream(turn) {
                 try Task.checkCancellation()
@@ -503,12 +510,13 @@ struct ReplyJob: Sendable {
         return outcome
     }
 
-    /// Replies built from the user's calendar or reminders stay on the device: the cloud provider
-    /// sees that such a reply existed, not what it said.
+    /// Replies built from the user's private data stay on the device: the cloud provider sees that
+    /// such a reply existed, not what it said.
     static func withoutPersonalData(_ message: Message) -> Message {
-        guard message.role == .assistant, !message.extras.personalDataUsed.isEmpty else { return message }
+        guard message.role == .assistant, message.extras.usedPrivateData else { return message }
         var redacted = message
-        redacted.content = "[An on-device answer based on the user's private calendar/reminders data, not shared.]"
+        let sources = message.extras.personalDataUsed.filter(\.isPrivate).map(\.rawValue).joined(separator: ", ")
+        redacted.content = "[An on-device answer based on the user's private data (\(sources)), not shared.]"
         return redacted
     }
 

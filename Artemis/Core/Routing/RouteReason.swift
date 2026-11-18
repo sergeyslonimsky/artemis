@@ -21,7 +21,13 @@ public enum RouteReason: String, Codable, Sendable {
     case simple
     case writing
     case deviceAction = "device_action"
+    /// Calendar and reminders.
     case personalData = "personal_data"
+    case contacts
+    case alarm
+    case weather
+    case places
+    case health
     case freshInformation = "fresh_information"
     case complexReasoning = "complex_reasoning"
     case math
@@ -40,8 +46,32 @@ public enum RouteReason: String, Codable, Sendable {
              .longInput, .onDeviceUnavailable, .freshInformation, .complexReasoning, .math, .code, .longForm,
              .onDeviceFailed, .onDeviceDeclined:
             true
-        case .userSelectedOnDevice, .noCloudProvider, .smallTalk, .cloudCantReadAttachment, .personalData, .simple, .writing, .deviceAction:
+        case .userSelectedOnDevice, .noCloudProvider, .smallTalk, .cloudCantReadAttachment, .personalData, .simple, .writing, .deviceAction,
+             .contacts, .alarm, .weather, .places, .health:
             false
+        }
+    }
+
+    /// On-device tools the reply may use.
+    public var toolGroups: Set<ToolGroup> {
+        switch self {
+        case .personalData: [.schedule]
+        case .contacts: [.contacts]
+        case .alarm: [.alarms]
+        case .weather: [.weather]
+        case .places: [.places]
+        case .health: [.health]
+        // The user picked the on-device model for everything, so it gets every tool.
+        case .userSelectedOnDevice: Set(ToolGroup.allCases)
+        default: []
+        }
+    }
+
+    /// The request is about the user's own data: the reply stays on the device and isn't escalated.
+    public var keepsDataOnDevice: Bool {
+        switch self {
+        case .personalData, .contacts, .alarm, .places, .health: true
+        default: false
         }
     }
 
@@ -62,6 +92,11 @@ public enum RouteReason: String, Codable, Sendable {
         case .writing: "a writing task"
         case .deviceAction: "device actions aren't possible from chat"
         case .personalData: "it uses your calendar or reminders, which stay on this device"
+        case .contacts: "it uses your contacts, which stay on this device"
+        case .alarm: "alarms and timers are set on this device"
+        case .weather: "the on-device model can check the weather"
+        case .places: "it uses your location, which stays on this device"
+        case .health: "it uses your health data, which stays on this device"
         case .freshInformation: "it needs up-to-date information"
         case .complexReasoning: "it needs complex reasoning"
         case .math: "it involves calculations"

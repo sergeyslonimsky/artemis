@@ -15,8 +15,8 @@ public struct ChatTurn: Sendable {
     /// (the on-device model reuses its session). `nil` for one-off utility requests.
     public var conversationId: String?
     public var replyId: String?
-    /// Let the on-device model use Calendar/Reminders tools.
-    public var allowsPersonalData: Bool = false
+    /// On-device tools the model may use for this turn.
+    public var toolGroups: Set<ToolGroup> = []
 
     public init(
         messages: [Message],

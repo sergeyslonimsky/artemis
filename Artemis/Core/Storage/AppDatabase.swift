@@ -263,6 +263,11 @@ public final class AppDatabase: Sendable {
             """)
         }
 
+        // Migration 12: per-group switches for on-device tools
+        migrator.registerMigration("v12_tool_groups") { db in
+            try db.execute(sql: "ALTER TABLE settings ADD COLUMN disabled_tool_groups TEXT NOT NULL DEFAULT ''")
+        }
+
         return migrator
     }
 

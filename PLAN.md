@@ -298,7 +298,25 @@ Foundation Models tool calling: модель сама вызывает инст�
       (заменяются пометкой).
 - [x] Миграция v11: `messages.extras` (JSON: использованные инструменты, черновики и их статус),
       `settings.personal_data_tools`.
-- Дальше (не в этой итерации): Контакты, местоположение + WeatherKit, HealthKit.
+
+Вторая итерация — остальные источники:
+
+- [x] Группы инструментов (`ToolGroup`): schedule, contacts, alarms, weather, places, health. В сессию попадают
+      только группы, подходящие под категорию запроса (контекст 4096 токенов); в режиме On-device — все.
+- [x] Контакты (Contacts): `findContact(name)`, `draftContactAction(call|message|email, name, text)` →
+      карточка «Call / Write» открывает Телефон / Сообщения / Почту.
+- [x] Будильники и таймеры (AlarmKit): `draftAlarm(alarm|timer, label, time, minutes)` → «Set».
+- [x] Погода: `getWeather(place, days)` через Open-Meteo (WeatherKit недоступен personal team);
+      атрибуция под ответом, координаты округляются до ~1 км.
+- [x] Место (CoreLocation + MapKit): `getCurrentLocation`, `searchPlaces(query, near)`.
+- [x] Здоровье (HealthKit, только чтение): `getHealthData(metric, days)` — шаги, дистанция, калории, сон,
+      пульс, пульс в покое, тренировки, вес.
+- [x] Роутер: категории contacts / alarm / weather / places / health; запросы о своих данных на неподдерживаемом
+      языке (русский) всё равно классифицируются и остаются on-device; weather/places при выключенном
+      инструменте уходят в облако.
+- [x] Settings → On-device model → «Device data & actions»: общий тумблер и тумблер на каждую группу (миграция v12).
+- Заметки (Notes): у Apple нет публичного API — невозможно.
+- [ ] Таймер без Live Activity: проверить, как AlarmKit показывает обратный отсчёт без widget extension.
 
 ### Этап 5 — Тесты
 

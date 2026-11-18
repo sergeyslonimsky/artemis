@@ -17,6 +17,8 @@ public struct RouteContext: Sendable {
     public var hasUnsupportedAttachment: Bool
     /// What the chat's cloud model accepts; `nil` when there's no cloud model.
     public var cloudCapabilities: ProviderCapabilities?
+    /// On-device tools switched on in the settings.
+    public var availableTools: Set<ToolGroup>
 
     public init(
         message: Message,
@@ -25,7 +27,8 @@ public struct RouteContext: Sendable {
         onDeviceUsable: Bool,
         hasCloud: Bool,
         hasUnsupportedAttachment: Bool = false,
-        cloudCapabilities: ProviderCapabilities? = nil
+        cloudCapabilities: ProviderCapabilities? = nil,
+        availableTools: Set<ToolGroup> = []
     ) {
         self.message = message
         self.recentHistory = recentHistory
@@ -34,6 +37,7 @@ public struct RouteContext: Sendable {
         self.hasCloud = hasCloud
         self.hasUnsupportedAttachment = hasUnsupportedAttachment
         self.cloudCapabilities = cloudCapabilities
+        self.availableTools = availableTools
     }
 }
 
@@ -50,9 +54,15 @@ public struct Router: Sendable {
             supportsLanguage: { SystemLanguageModel.default.supportsLocale(Locale(languageCode: $0)) },
             onDeviceContextSize: SystemLanguageModel.default.contextSize
         )
-        let decision: RouteDecision
+        var decision: RouteDecision
         if let ruled = rules.evaluate(context) {
             decision = ruled
+            // A request about the user's own data in, say, Russian still needs the on-device tools:
+            // the cloud model can't see that data.
+            if ruled.reason == .unsupportedLanguage, !context.availableTools.isEmpty {
+                let classified = await RequestClassifier.classify(context)
+                if !classified.reason.toolGroups.isEmpty { decision = classified }
+            }
         } else {
             decision = await RequestClassifier.classify(context)
         }
@@ -173,6 +183,11 @@ enum RequestCategory {
     case writing
     case deviceAction
     case personalData
+    case contacts
+    case alarm
+    case weather
+    case places
+    case health
     case math
     case freshInformation
     case complexReasoning
@@ -198,9 +213,15 @@ enum RequestClassifier {
         - writing: rewrite, summarize, translate between common languages, fix grammar, or draft a short text the user provides context for.
         - personalData: about the user's own schedule, calendar events, meetings, plans or reminders/to-dos, \
         including adding an event or a reminder.
-        - deviceAction: asks to set an alarm or timer, send a message, make a call, or change a setting.
+        - contacts: about a person in the user's contacts (phone, email, birthday, address), or calling, \
+        texting or emailing someone.
+        - alarm: set an alarm or a timer.
+        - weather: the weather or forecast, here or in a named place.
+        - places: the user's current location, or finding places such as shops or restaurants nearby or in a named place.
+        - health: the user's own steps, sleep, heart rate, workouts, weight or other activity and health data.
+        - deviceAction: asks to change a device setting or control another app.
         - math: any calculation, unit conversion with numbers, percentages, equations or word problems.
-        - freshInformation: needs the internet or current data: news, weather, prices, scores, recent events, a specific website.
+        - freshInformation: needs the internet or current data: news, prices, scores, recent events, a specific website.
         - complexReasoning: multi-step math, logic puzzles, planning, careful analysis or comparison of options.
         - code: writing, explaining or debugging code, or technical configuration.
         - longForm: a long, detailed or expert-level answer such as an essay, report or in-depth explanation.
@@ -211,9 +232,18 @@ enum RequestClassifier {
         "make this email sound more polite: ..." -> writing
         "what do I have tomorrow" -> personalData
         "remind me to buy milk at 6pm" -> personalData
-        "wake me up at 7" -> deviceAction
+        "when is Anna's birthday" -> contacts
+        "text Mike that I'm running late" -> contacts
+        "wake me up at 7" -> alarm
+        "set a timer for 10 minutes" -> alarm
+        "what's the weather in Warsaw tomorrow" -> weather
+        "do I need an umbrella today" -> weather
+        "where am I" -> places
+        "find a pharmacy nearby" -> places
+        "how did I sleep this week" -> health
+        "how many steps did I walk yesterday" -> health
+        "turn on dark mode" -> deviceAction
         "what is 17% of 2,340" -> math
-        "what's the weather in Warsaw tomorrow" -> freshInformation
         "who won the match yesterday" -> freshInformation
         "if a train leaves at 3pm at 80 km/h and another at 4pm at 100 km/h, when does the second catch up" -> complexReasoning
         "what's in this photo (the user attached an image)" -> simpleQuestion
@@ -230,20 +260,30 @@ enum RequestClassifier {
             let category = try await withTimeout(timeout) {
                 try await category(for: context)
             }
-            return decision(for: category)
+            return decision(for: category, availableTools: context.availableTools)
         } catch {
             logger.error("Classification failed: \(error.localizedDescription, privacy: .public)")
             return .onDevice(.simple)
         }
     }
 
-    static func decision(for category: RequestCategory) -> RouteDecision {
-        switch category {
+    /// Requests for switched-off tools: weather and places can still be answered from the web;
+    /// personal data can't, so the on-device model explains that.
+    static func decision(for category: RequestCategory, availableTools: Set<ToolGroup>) -> RouteDecision {
+        func tool(_ group: ToolGroup, _ reason: RouteReason, otherwise fallback: RouteDecision) -> RouteDecision {
+            availableTools.contains(group) ? .onDevice(reason) : fallback
+        }
+        return switch category {
         case .smallTalk: .onDevice(.smallTalk)
         case .simpleQuestion: .onDevice(.simple)
         case .writing: .onDevice(.writing)
         case .deviceAction: .onDevice(.deviceAction)
-        case .personalData: .onDevice(.personalData)
+        case .personalData: tool(.schedule, .personalData, otherwise: .onDevice(.deviceAction))
+        case .contacts: tool(.contacts, .contacts, otherwise: .onDevice(.deviceAction))
+        case .alarm: tool(.alarms, .alarm, otherwise: .onDevice(.deviceAction))
+        case .health: tool(.health, .health, otherwise: .onDevice(.deviceAction))
+        case .weather: tool(.weather, .weather, otherwise: .cloud(.freshInformation))
+        case .places: tool(.places, .places, otherwise: .cloud(.freshInformation))
         case .math: .cloud(.math)
         case .freshInformation: .cloud(.freshInformation)
         case .complexReasoning: .cloud(.complexReasoning)

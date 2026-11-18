@@ -13,8 +13,10 @@ public struct AppSettings: Identifiable, Codable, Equatable, Sendable {
     public var cloudPolicy: CloudPolicy
     public var onDeviceEnabled: Bool
     public var onDeviceTitles: Bool
-    /// Let the on-device model read Calendar and Reminders and draft new entries.
+    /// Let the on-device model use device data and draft actions (master switch).
     public var personalDataTools: Bool
+    /// Tool groups switched off individually.
+    public var disabledToolGroups: Set<ToolGroup>
 
     public init(
         id: Int64 = 1,
@@ -27,7 +29,8 @@ public struct AppSettings: Identifiable, Codable, Equatable, Sendable {
         cloudPolicy: CloudPolicy = .alwaysAsk,
         onDeviceEnabled: Bool = true,
         onDeviceTitles: Bool = true,
-        personalDataTools: Bool = true
+        personalDataTools: Bool = true,
+        disabledToolGroups: Set<ToolGroup> = []
     ) {
         self.id = id
         self.defaultProviderId = defaultProviderId
@@ -40,6 +43,11 @@ public struct AppSettings: Identifiable, Codable, Equatable, Sendable {
         self.onDeviceEnabled = onDeviceEnabled
         self.onDeviceTitles = onDeviceTitles
         self.personalDataTools = personalDataTools
+        self.disabledToolGroups = disabledToolGroups
+    }
+
+    public var enabledToolGroups: Set<ToolGroup> {
+        personalDataTools ? Set(ToolGroup.allCases).subtracting(disabledToolGroups) : []
     }
 }
 
@@ -59,6 +67,7 @@ extension AppSettings: FetchableRecord, PersistableRecord, TableRecord {
         public static let onDeviceEnabled = Column("on_device_enabled")
         public static let onDeviceTitles = Column("on_device_titles")
         public static let personalDataTools = Column("personal_data_tools")
+        public static let disabledToolGroups = Column("disabled_tool_groups")
     }
 
     public func encode(to container: inout PersistenceContainer) throws {
@@ -73,6 +82,7 @@ extension AppSettings: FetchableRecord, PersistableRecord, TableRecord {
         container[Columns.onDeviceEnabled] = onDeviceEnabled ? 1 : 0
         container[Columns.onDeviceTitles] = onDeviceTitles ? 1 : 0
         container[Columns.personalDataTools] = personalDataTools ? 1 : 0
+        container[Columns.disabledToolGroups] = disabledToolGroups.map(\.rawValue).sorted().joined(separator: ",")
     }
 
     public init(row: Row) throws {
@@ -93,5 +103,7 @@ extension AppSettings: FetchableRecord, PersistableRecord, TableRecord {
         onDeviceTitles = titlesInt != 0
         let toolsInt: Int = row[Columns.personalDataTools]
         personalDataTools = toolsInt != 0
+        let disabledRaw: String = row[Columns.disabledToolGroups] ?? ""
+        disabledToolGroups = Set(disabledRaw.split(separator: ",").compactMap { ToolGroup(rawValue: String($0)) })
     }
 }
