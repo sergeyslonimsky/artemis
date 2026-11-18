@@ -19,6 +19,8 @@ public struct ComposerView: View {
     @State private var isShowingPhotoPicker: Bool = false
     @State private var isShowingCamera: Bool = false
     @FocusState private var isFocused: Bool
+    @State private var dictation = Dictation()
+    @State private var dictationError: String?
 
     public init(
         text: Binding<String>,
@@ -59,10 +61,12 @@ public struct ComposerView: View {
                 }
             }
 
-            TextField("Ask anything", text: $text, axis: .vertical)
+            TextField(dictation.isActive ? "Listening…" : "Ask anything", text: $text, axis: .vertical)
                 .lineLimit(1...8)
                 .focused($isFocused)
                 .padding(.horizontal, 4)
+                // Typing while dictating would be overwritten by the next recognized words.
+                .disabled(dictation.isActive)
 
             HStack(spacing: 8) {
                 attachMenu
@@ -78,6 +82,9 @@ public struct ComposerView: View {
 
                 Spacer()
 
+                if !isBusy {
+                    dictationButton
+                }
                 sendButton
             }
         }
@@ -152,6 +159,70 @@ public struct ComposerView: View {
         .accessibilityLabel("Attach")
     }
 
+    private var dictationButton: some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            toggleDictation()
+        } label: {
+            ZStack {
+                if dictation.isActive {
+                    Circle()
+                        .fill(Color.accentColor.opacity(0.18))
+                        .scaleEffect(1 + CGFloat(dictation.level) * 0.5)
+                        .animation(.easeOut(duration: 0.1), value: dictation.level)
+                }
+                Image(systemName: dictation.isActive ? "stop.fill" : "mic")
+                    .font(.system(size: dictation.isActive ? 13 : 17, weight: .semibold))
+                    .foregroundStyle(dictation.isActive ? Color.accentColor : Color.primary)
+            }
+            .frame(width: 34, height: 34)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(dictation.isActive ? "Stop dictation" : "Dictate")
+        .alert(
+            "Dictation isn't available",
+            isPresented: Binding(get: { dictationError != nil }, set: { if !$0 { dictationError = nil } })
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(dictationError ?? "")
+        }
+        .onChange(of: dictation.state) { _, state in
+            if case .failed(let message) = state { dictationError = message }
+        }
+        .onDisappear {
+            Task { await dictation.stop() }
+        }
+    }
+
+    private func toggleDictation() {
+        if dictation.isActive {
+            Task { await dictation.stop() }
+            return
+        }
+        // Recognized words go after what's already typed.
+        let base = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        isFocused = false
+        Task {
+            await dictation.start { recognized in
+                text = base.isEmpty ? recognized : (recognized.isEmpty ? base : base + " " + recognized)
+            }
+        }
+    }
+
+    /// Sends what's in the field, finishing dictation first so its last words are included.
+    private func send() {
+        guard dictation.isActive else {
+            onSend()
+            return
+        }
+        Task {
+            await dictation.stop()
+            onSend()
+        }
+    }
+
     @ViewBuilder
     private var sendButton: some View {
         if isBusy {
@@ -167,7 +238,7 @@ public struct ComposerView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Stop")
-        } else if !canSend, let onVoice {
+        } else if !canSend, !dictation.isActive, let onVoice {
             Button {
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                 onVoice()
@@ -184,7 +255,7 @@ public struct ComposerView: View {
             Button {
                 guard canSend else { return }
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                onSend()
+                send()
             } label: {
                 Image(systemName: "arrow.up")
                     .font(.system(size: 16, weight: .bold))

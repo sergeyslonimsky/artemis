@@ -42,6 +42,7 @@
 		9C6AFFD56C971ADBD19C1C09 /* PersonalDataTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C07B53913AF7A7B45BAE3BD /* PersonalDataTools.swift */; };
 		A058146961E426280FD5BF63 /* PersonalDataStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5996B9D9EEAC3AAC1F2C79A /* PersonalDataStore.swift */; };
 		A1029DA96183A8347CD6D4B5 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = AAEF9BB9619076431123BA40 /* GRDB */; };
+		A41391764BDDF571F99DF02A /* Dictation.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD3C871EC6FC9022CD1377A9 /* Dictation.swift */; };
 		A87B7F75E9B3AA5A82539CF9 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65EF6987DE546E7A529FE42F /* SettingsView.swift */; };
 		AC891FEA4EA09A2D6500639E /* ImageTextRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E6D5A3831DD05E8ADDC8A3B /* ImageTextRecognizer.swift */; };
 		AE9BDF2909018BB6A0C0539F /* Provider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 069C91EDDACF0B2ADEBD6DB1 /* Provider.swift */; };
@@ -116,6 +117,7 @@
 		F2DD9FC347DC05D0156997A9 /* ShimmerModifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShimmerModifier.swift; sourceTree = "<group>"; };
 		F56ED682496876010A2FEC07 /* Attachment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Attachment.swift; sourceTree = "<group>"; };
 		F79C1A35D5903AFF1AB6F25F /* Router.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Router.swift; sourceTree = "<group>"; };
+		FD3C871EC6FC9022CD1377A9 /* Dictation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Dictation.swift; sourceTree = "<group>"; };
 		FFA3555199FA3736282E4138 /* APIKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIKeyStore.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -310,6 +312,7 @@
 		EEB752E4B8B99AE53B93F2ED /* Voice */ = {
 			isa = PBXGroup;
 			children = (
+				FD3C871EC6FC9022CD1377A9 /* Dictation.swift */,
 				8946DCEB03766BCE526D1E6C /* SpeechOutput.swift */,
 				A3A997457FED3C8D02F7DB18 /* VoiceAudio.swift */,
 				5A518A009882B7B16C8C9220 /* VoiceLog.swift */,
@@ -441,6 +444,7 @@
 				04E6BBE757E0A35976D37AD0 /* ComposerView.swift in Sources */,
 				DCD7448FC81B0A63A917CC21 /* ContactsTools.swift in Sources */,
 				D813B451C68A76EC20A6CFB8 /* ContentView.swift in Sources */,
+				A41391764BDDF571F99DF02A /* Dictation.swift in Sources */,
 				630A4AF3E861A002EB076E2D /* DraftPerformer.swift in Sources */,
 				258CFDE65F04BF6049B81DC1 /* DrawerView.swift in Sources */,
 				315008B8A46ABA19CEB294E0 /* HealthTools.swift in Sources */,
