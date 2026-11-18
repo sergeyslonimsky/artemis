@@ -61,8 +61,13 @@ enum DraftPerformer {
         case .message:
             return URL(string: "sms:\(phoneDigits(address))" + (body.isEmpty ? "" : "&body=\(body)"))
         case .email:
-            let to = address.addingPercentEncoding(withAllowedCharacters: .urlUserAllowed) ?? address
-            return URL(string: "mailto:\(to)" + (body.isEmpty ? "" : "?body=\(body)"))
+            var components = URLComponents()
+            components.scheme = "mailto"
+            components.path = address
+            if let text = draft.body, !text.isEmpty {
+                components.queryItems = [URLQueryItem(name: "body", value: text)]
+            }
+            return components.url
         default:
             return nil
         }

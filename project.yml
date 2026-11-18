@@ -18,6 +18,9 @@ targets:
     deploymentTarget: "27.2"
     sources:
       - path: Artemis
+    scheme:
+      testTargets:
+        - ArtemisTests
     # Keys without an INFOPLIST_KEY_ build setting; merged into the generated Info.plist.
     info:
       path: Artemis/Info.plist
@@ -58,3 +61,19 @@ targets:
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Turns what you say in voice mode into text, on this device."
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+
+  ArtemisTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "27.2"
+    sources:
+      - path: ArtemisTests
+    dependencies:
+      - target: Artemis
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.artemis.ios.tests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: PLFAQZ6LX2

@@ -212,8 +212,9 @@ private struct WireChunk: Decodable {
         let delta: Delta
     }
 
+    /// Only the completion count is used; some providers omit the prompt count.
     struct Usage: Decodable {
-        let promptTokens: Int
+        let promptTokens: Int?
         let completionTokens: Int
 
         enum CodingKeys: String, CodingKey {
