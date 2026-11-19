@@ -12,6 +12,8 @@ struct ProviderEditView: View {
     @State private var testRequest: UUID?
 
     private let isNew: Bool
+    /// Names used by the other providers, as `Provider.nameKey`.
+    private let takenNames: Set<String>
     let onSave: (Provider, String) -> Void
 
     private enum TestState: Equatable {
@@ -21,9 +23,10 @@ struct ProviderEditView: View {
         case failed(String)
     }
 
-    init(provider: Provider?, apiKey: String, onSave: @escaping (Provider, String) -> Void) {
+    init(provider: Provider?, apiKey: String, others: [Provider], onSave: @escaping (Provider, String) -> Void) {
         let kind = provider?.kind ?? .openRouter
         isNew = provider == nil
+        takenNames = Set(others.map { Provider.nameKey($0.name) })
         _draft = State(initialValue: provider ?? Provider(name: kind.displayName, kind: kind, baseUrl: kind.defaultBaseURL))
         _apiKey = State(initialValue: apiKey)
         self.onSave = onSave
@@ -88,14 +91,24 @@ struct ProviderEditView: View {
         } header: {
             Text("Provider Info")
         } footer: {
-            switch draft.kind {
-            case .openRouter:
-                Text("Only free models keeps models whose ID ends in “:free”. They're rate-limited and may log prompts.")
-            case .custom:
-                Text("Any OpenAI-compatible endpoint with /chat/completions.")
-            default:
-                EmptyView()
+            if isNameTaken {
+                Text("A provider named “\(resolvedName)” already exists. Choose another name.")
+                    .foregroundStyle(.red)
+            } else {
+                kindFooter
             }
+        }
+    }
+
+    @ViewBuilder
+    private var kindFooter: some View {
+        switch draft.kind {
+        case .openRouter:
+            Text("Only free models keeps models whose ID ends in “:free”. They're rate-limited and may log prompts.")
+        case .custom:
+            Text("Any OpenAI-compatible endpoint with /chat/completions.")
+        default:
+            EmptyView()
         }
     }
 
@@ -224,16 +237,24 @@ struct ProviderEditView: View {
         newModel = ""
     }
 
-    /// A provider is only usable with at least one model to pick.
+    /// The name the provider is saved under: the kind's name when left blank.
+    private var resolvedName: String {
+        let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? draft.kind.displayName : name
+    }
+
+    private var isNameTaken: Bool {
+        takenNames.contains(Provider.nameKey(resolvedName))
+    }
+
+    /// A provider is only usable with at least one model to pick, and its name tells it apart.
     private var canSave: Bool {
-        !draft.baseUrl.isEmpty && !draft.models.isEmpty
+        !draft.baseUrl.isEmpty && !draft.models.isEmpty && !isNameTaken
     }
 
     private func save() {
         var provider = draft
-        if provider.name.trimmingCharacters(in: .whitespaces).isEmpty {
-            provider.name = provider.kind.displayName
-        }
+        provider.name = resolvedName
         if provider.defaultModel.isEmpty {
             provider.defaultModel = provider.models.first ?? ""
         }

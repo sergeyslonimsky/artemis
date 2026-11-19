@@ -298,9 +298,16 @@ extension AppDatabase {
         }
     }
 
+    /// - Throws: `ProviderError.nameTaken` when another provider already uses the name.
     func saveProvider(_ provider: Provider, apiKey: String) throws {
+        try dbWriter.write { db in
+            let others = try Provider.filter(Column("id") != provider.id).fetchAll(db)
+            if others.contains(where: { Provider.nameKey($0.name) == Provider.nameKey(provider.name) }) {
+                throw ProviderError.nameTaken(provider.name)
+            }
+            try provider.save(db)
+        }
         try apiKeys.setAPIKey(apiKey, for: provider.id)
-        try dbWriter.write { db in try provider.save(db) }
     }
 
     func deleteProvider(id: String) throws {
@@ -369,7 +376,8 @@ extension AppDatabase {
             SELECT c.*, best.content AS matched_content
               FROM chats c
               LEFT JOIN best ON best.chat_id = c.id
-             WHERE best.chat_id IS NOT NULL OR instr(lower(c.title), lower(?2)) > 0
+             WHERE best.chat_id IS NOT NULL
+                OR instr(swiftLowercaseString(c.title), swiftLowercaseString(?2)) > 0
              ORDER BY c.updated_at DESC
              LIMIT ?3
             """

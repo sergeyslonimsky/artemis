@@ -77,6 +77,7 @@
 		BEA777384C14A4847CBDD19B /* Textual in Frameworks */ = {isa = PBXBuildFile; productRef = 6206B1815E6A3B7CE60D79DD /* Textual */; };
 		C09179E2F78FDA54023C897B /* ImageTextReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = EADC67F28B5D232FB939969C /* ImageTextReader.swift */; };
 		C0C2479B8ED3FB32B33EC722 /* SettingsPages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C7D65C3AB6DF0FD9E15C45F /* SettingsPages.swift */; };
+		C17BB2137BD5CD5436890E18 /* AsyncValueObservation+Retry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A807ABF0DE91E76CA1A78B6 /* AsyncValueObservation+Retry.swift */; };
 		C19A3C819469ED4BAA865817 /* LaunchIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBAF9BC847A95CC1C0C37AB9 /* LaunchIntents.swift */; };
 		C7D270A8D251C3F8D25A9CED /* Presentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5098647F1967BBECF97F71B /* Presentation.swift */; };
 		CA5DA5872DAB0F607CBB2747 /* Attachment.swift in Sources */ = {isa = PBXBuildFile; fileRef = F56ED682496876010A2FEC07 /* Attachment.swift */; };
@@ -210,6 +211,7 @@
 		8946DCEB03766BCE526D1E6C /* SpeechOutput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechOutput.swift; sourceTree = "<group>"; };
 		8947436D59599494BD9C20D5 /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
 		89548B349C967661C7521E49 /* TranslationSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslationSettingsView.swift; sourceTree = "<group>"; };
+		8A807ABF0DE91E76CA1A78B6 /* AsyncValueObservation+Retry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AsyncValueObservation+Retry.swift"; sourceTree = "<group>"; };
 		8C316D108D2D87FB19D0485C /* HelperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelperTests.swift; sourceTree = "<group>"; };
 		8DDF6F0BDE6EE9A6204F4226 /* TranslatedTurn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranslatedTurn.swift; sourceTree = "<group>"; };
 		8DFD05B5C76227164CB9FE5F /* ArtemisShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtemisShortcuts.swift; sourceTree = "<group>"; };
@@ -481,6 +483,7 @@
 				74161ED0BDD04CEE49A5517A /* AppDatabase.swift */,
 				363F9435EA71FEAB2A5B134A /* AppDatabase+Queries.swift */,
 				127007ADFDE48196751BBB1D /* AppRecord.swift */,
+				8A807ABF0DE91E76CA1A78B6 /* AsyncValueObservation+Retry.swift */,
 			);
 			path = Storage;
 			sourceTree = "<group>";
@@ -785,6 +788,7 @@
 				74426400F1962183E0163D90 /* ArtemisApp.swift in Sources */,
 				FF67E7A11ED0F81A4A645F39 /* ArtemisShortcuts.swift in Sources */,
 				A05D5201EFF03FE692F63F33 /* AsyncThrowingStream+Task.swift in Sources */,
+				C17BB2137BD5CD5436890E18 /* AsyncValueObservation+Retry.swift in Sources */,
 				CA5DA5872DAB0F607CBB2747 /* Attachment.swift in Sources */,
 				30B012F82FE13F6205364F8E /* AttachmentCardView.swift in Sources */,
 				0B9B73FEF90149500D8EB6AB /* AttachmentProcessor.swift in Sources */,

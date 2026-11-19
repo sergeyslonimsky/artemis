@@ -93,7 +93,7 @@ struct ChatView: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
-        .errorAlert("Couldn't send message", message: $session.errorMessage)
+        .errorAlert("Something went wrong", message: $session.errorMessage)
         .sensoryFeedback(.success, trigger: confirmedDrafts)
         .task { await session.observeChat() }
         .task { await session.observeMessages() }

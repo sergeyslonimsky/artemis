@@ -152,13 +152,12 @@ struct DrawerView: View {
     }
 
     private func observeChats() async {
-        do {
-            for try await value in database.observeChats() {
-                chats = value
-                if isSearching { await search(debounce: false) }
-            }
-        } catch {
+        await database.observeChats().keepDelivering(onError: { error in
             Self.logger.error("Chats observation failed: \(error.localizedDescription, privacy: .public)")
+            errorMessage = "Couldn't load chats: \(error.localizedDescription)"
+        }) { value in
+            chats = value
+            if isSearching { await search(debounce: false) }
         }
     }
 

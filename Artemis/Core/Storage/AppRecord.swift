@@ -8,6 +8,8 @@ protocol AppRecord: Codable, FetchableRecord, PersistableRecord {}
 extension AppRecord {
     static var databaseColumnDecodingStrategy: DatabaseColumnDecodingStrategy { .convertFromSnakeCase }
     static var databaseColumnEncodingStrategy: DatabaseColumnEncodingStrategy { .convertToSnakeCase }
-    static var databaseDateDecodingStrategy: DatabaseDateDecodingStrategy { .millisecondsSince1970 }
-    static var databaseDateEncodingStrategy: DatabaseDateEncodingStrategy { .millisecondsSince1970 }
+
+    // GRDB's requirements take the column; same-named properties without it are never called.
+    static func databaseDateDecodingStrategy(for column: String) -> DatabaseDateDecodingStrategy { .millisecondsSince1970 }
+    static func databaseDateEncodingStrategy(for column: String) -> DatabaseDateEncodingStrategy { .millisecondsSince1970 }
 }

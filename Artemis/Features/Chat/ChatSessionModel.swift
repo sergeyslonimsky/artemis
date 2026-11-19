@@ -124,13 +124,10 @@ final class ChatSessionModel {
     }
 
     private func observe<Value>(_ values: AsyncValueObservation<Value>, _ name: String, _ apply: (Value) -> Void) async {
-        do {
-            for try await value in values {
-                apply(value)
-            }
-        } catch {
+        await values.keepDelivering(onError: { error in
             Self.logger.error("Observing \(name, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
-        }
+            errorMessage = "Couldn't load \(name): \(error.localizedDescription)"
+        }, apply)
     }
 
     /// Fresh data for the model picker: the on-device status can change while the app runs.

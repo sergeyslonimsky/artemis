@@ -47,6 +47,99 @@ struct DatabaseTests {
         #expect(database.apiKey(providerId: provider.id) == "secret")
     }
 
+    @Test func providerNamesAreUnique() throws {
+        let database = try makeDatabase()
+        var first = Provider(name: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1")
+        try database.saveProvider(first, apiKey: "")
+
+        let second = Provider(name: " openrouter ", baseUrl: "https://openrouter.ai/api/v1")
+        #expect(throws: ProviderError.nameTaken(" openrouter ")) {
+            try database.saveProvider(second, apiKey: "")
+        }
+        // Saving a provider under its own name again is an edit, not a duplicate.
+        first.defaultModel = "m"
+        try database.saveProvider(first, apiKey: "")
+        #expect(try database.fetchProviders().map(\.id) == [first.id])
+    }
+
+    @Test func duplicateProviderNamesGetNumbered() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue, upTo: "v17_dates_as_milliseconds")
+        try queue.write { db in
+            try db.execute(sql: """
+            INSERT INTO providers (id, name, base_url, created_at, updated_at)
+            VALUES ('a', 'OpenRouter', 'https://a', 1, 1),
+                   ('b', 'openrouter', 'https://b', 2, 2),
+                   ('c', 'OpenRouter', 'https://c', 3, 3)
+            """)
+        }
+        let attachments = FileManager.default.temporaryDirectory.appending(path: "artemis-tests-\(UUID().uuidString)")
+        let database = try AppDatabase(queue, attachmentsDirectory: attachments, apiKeys: InMemoryAPIKeyStore())
+
+        #expect(try database.fetchProviders().map(\.name) == ["OpenRouter", "openrouter 2", "OpenRouter 3"])
+    }
+
+    @Test func observationRecoversAfterAFailedRead() async throws {
+        let database = try makeDatabase()
+        try await database.dbWriter.write { db in
+            try db.execute(sql: """
+            INSERT INTO providers (id, name, base_url, kind, created_at, updated_at)
+            VALUES ('a', 'A', 'https://a', 'bogus', 0, 0)
+            """)
+        }
+        let (errors, names) = await Task {
+            var errors = 0
+            var names: [String] = []
+            await database.observeProviders().keepDelivering(retryDelay: .milliseconds(10), onError: { _ in
+                errors += 1
+                try? database.dbWriter.write { db in try db.execute(sql: "UPDATE providers SET kind = 'custom'") }
+            }) { providers in
+                names = providers.map(\.name)
+                withUnsafeCurrentTask { $0?.cancel() }
+            }
+            return (errors, names)
+        }.value
+
+        #expect(errors == 1)
+        #expect(names == ["A"])
+    }
+
+    @Test func recordDatesAreStoredAsMilliseconds() throws {
+        let database = try makeDatabase()
+        let createdAt = Date(timeIntervalSince1970: 1_794_961_053.491)
+        let provider = Provider(name: "P", baseUrl: "https://example.com/v1", createdAt: createdAt)
+        try database.saveProvider(provider, apiKey: "")
+        try database.createChat(title: "Chat")
+
+        let stored = try database.dbWriter.read { db in
+            try Int64.fetchOne(db, sql: "SELECT created_at FROM providers")
+        }
+        #expect(stored == 1_794_961_053_491)
+        #expect(try database.fetchProviders().first?.createdAt == createdAt)
+        #expect(try database.dbWriter.read { db in
+            try String.fetchOne(db, sql: "SELECT typeof(created_at) FROM chats")
+        } == "integer")
+    }
+
+    @Test func textDatesMigrateToMilliseconds() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue, upTo: "v16_attachment_text")
+        try queue.write { db in
+            try db.execute(sql: """
+            INSERT INTO providers (id, name, base_url, created_at, updated_at)
+            VALUES ('a', 'A', 'https://a', '58851-07-18 11:15:55.000', '2026-11-19 19:28:04.242'),
+                   ('b', 'B', 'https://b', 1794961053491, 1794961053491)
+            """)
+        }
+        let attachments = FileManager.default.temporaryDirectory.appending(path: "artemis-tests-\(UUID().uuidString)")
+        let database = try AppDatabase(queue, attachmentsDirectory: attachments, apiKeys: InMemoryAPIKeyStore())
+
+        let providers = try database.fetchProviders()
+        #expect(providers.map(\.id) == ["b", "a"])
+        #expect(providers[1].createdAt.databaseMilliseconds == 1_795_008_165_355)
+        #expect(providers[1].updatedAt.databaseMilliseconds == 1_795_116_484_242)
+    }
+
     @Test func messagesGetIncreasingSeqAndDeleteFromTruncates() throws {
         let database = try makeDatabase()
         let chat = try database.createChat(title: "Test")
@@ -120,6 +213,13 @@ struct DatabaseTests {
         #expect(hit.chat.routingMode == .cloud)
         #expect(hit.chat.model == "m")
         #expect(hit.snippet.contains("umbrella"))
+    }
+
+    @Test func titleSearchIgnoresCaseBeyondASCII() throws {
+        let database = try makeDatabase()
+        let chat = try database.createChat(title: "Поездка в Париж")
+
+        #expect(try database.search(query: "париж").map(\.chat.id) == [chat.id])
     }
 
     @Test func generatedTitleNeverReplacesAManualOne() throws {
