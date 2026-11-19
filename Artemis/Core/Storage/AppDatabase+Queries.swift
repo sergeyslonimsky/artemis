@@ -245,6 +245,14 @@ extension AppDatabase {
             .fetchAll(db)
     }
 
+    /// Stores what OCR found in an image attachment (empty when nothing).
+    func setRecognizedText(_ text: String, attachmentId: String) throws {
+        try dbWriter.write { db in
+            _ = try Attachment.filter(id: attachmentId)
+                .updateAll(db, Attachment.Columns.recognizedText.set(to: text))
+        }
+    }
+
     // MARK: - Attachment files
 
     func attachmentURL(id: String) -> URL {

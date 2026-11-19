@@ -34,6 +34,12 @@ struct OnDeviceSettingsView: View {
                 Text("Apple's model runs on this iPhone: it's private, free and works offline, but it's small. "
                     + "In Auto mode harder requests go to your cloud provider.")
             }
+
+            Section {
+                NavigationLink("Translation") { TranslationSettingsView() }
+            } footer: {
+                Text("Download a language the on-device model doesn't speak to keep those chats on this iPhone.")
+            }
         }
         .navigationTitle("On-device model")
         .navigationBarTitleDisplayMode(.inline)
@@ -323,6 +329,9 @@ struct PresetEditView: View {
 struct DeviceDataSettingsView: View {
     let model: SettingsModel
     @State private var alarms: [AlarmScheduler.Scheduled] = []
+    @State private var places: [SavedPlace] = []
+    /// A new place (empty) or one being edited.
+    @State private var editingPlace: SavedPlace?
 
     var body: some View {
         Form {
@@ -351,6 +360,31 @@ struct DeviceDataSettingsView: View {
             .disabled(!model.settings.personalDataTools)
 
             Section {
+                ForEach(places) { place in
+                    Button {
+                        editingPlace = place
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(place.name)
+                                .foregroundStyle(.primary)
+                            Text(place.address)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .onDelete { places.remove(atOffsets: $0) }
+                Button("Add Place", systemImage: "plus") {
+                    editingPlace = SavedPlace(name: "", address: "")
+                }
+            } header: {
+                Text("Your places")
+            } footer: {
+                Text("For questions like \"How long does it take to get to the gym?\" Stored only on this iPhone.")
+            }
+            .disabled(!model.settings.personalDataTools)
+
+            Section {
                 if alarms.isEmpty {
                     Text("None")
                         .foregroundStyle(.secondary)
@@ -372,9 +406,61 @@ struct DeviceDataSettingsView: View {
                 Text("They ring like Clock alarms, even in Silent mode, but iOS doesn't list them in the Clock app. Swipe to delete one.")
             }
         }
-        .onAppear { alarms = AlarmScheduler.scheduled() }
+        .onAppear {
+            alarms = AlarmScheduler.scheduled()
+            places = SavedPlaces.load()
+        }
+        .onChange(of: places) { _, places in SavedPlaces.save(places) }
+        .sheet(item: $editingPlace) { place in
+            SavedPlaceEditor(place: place) { saved in
+                if let index = places.firstIndex(where: { $0.id == saved.id }) {
+                    places[index] = saved
+                } else {
+                    places.append(saved)
+                }
+            }
+        }
         .navigationTitle("Device data & actions")
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// Adds a place or changes one; nothing is saved until Save.
+private struct SavedPlaceEditor: View {
+    @State var place: SavedPlace
+    let onSave: (SavedPlace) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    private var isNew: Bool { place.name.isEmpty && place.address.isEmpty }
+    @State private var title = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("Name", text: $place.name, prompt: Text("Gym"))
+                TextField("Address", text: $place.address, prompt: Text("Street, city"), axis: .vertical)
+                    .textContentType(.fullStreetAddress)
+            }
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", role: .cancel) { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        place.name = place.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                        place.address = place.address.trimmingCharacters(in: .whitespacesAndNewlines)
+                        onSave(place)
+                        dismiss()
+                    }
+                    .disabled(place.name.trimmingCharacters(in: .whitespaces).isEmpty
+                        || place.address.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+            // Fixed when the sheet opens, not while typing.
+            .onAppear { title = isNew ? "New Place" : "Edit Place" }
+        }
     }
 }
 

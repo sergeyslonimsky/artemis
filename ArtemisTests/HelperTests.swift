@@ -119,3 +119,46 @@ struct ProviderTests {
         }
     }
 }
+
+@Suite("Shared inbox")
+struct SharedInboxTests {
+    @Test func itemURLRoundTrips() {
+        let url = SharedInbox.url(for: "abc-123")
+        #expect(url.absoluteString == "artemis://shared/abc-123")
+        #expect(SharedInbox.itemId(in: url) == "abc-123")
+    }
+
+    @Test func ignoresOtherURLs() throws {
+        #expect(SharedInbox.itemId(in: try #require(URL(string: "artemis://shared/"))) == nil)
+        #expect(SharedInbox.itemId(in: try #require(URL(string: "artemis://other/abc"))) == nil)
+        #expect(SharedInbox.itemId(in: try #require(URL(string: "https://shared/abc"))) == nil)
+    }
+}
+
+@Suite("Translated Markdown")
+struct TranslatedMarkdownTests {
+    @Test func keepsMarkersOutOfTheTranslation() {
+        #expect(OnDeviceTranslator.MarkdownLines.split("## Plan") == ("## ", "Plan"))
+        #expect(OnDeviceTranslator.MarkdownLines.split("  - **Bold** text") == ("  - ", "**Bold** text"))
+        #expect(OnDeviceTranslator.MarkdownLines.split("2. Second") == ("2. ", "Second"))
+        #expect(OnDeviceTranslator.MarkdownLines.split("> - [x] Done") == ("> - [x] ", "Done"))
+        #expect(OnDeviceTranslator.MarkdownLines.split("Plain sentence.") == ("", "Plain sentence."))
+    }
+}
+
+@Suite("Saved places")
+struct SavedPlacesTests {
+    let places = [SavedPlace(name: "Gym", address: "1 Main St"), SavedPlace(name: "Café", address: "2 Side St")]
+
+    @Test func findsByNameIgnoringCaseAccentsAndMy() {
+        #expect(SavedPlaces.place(named: "gym", in: places)?.address == "1 Main St")
+        #expect(SavedPlaces.place(named: "My Gym", in: places)?.address == "1 Main St")
+        #expect(SavedPlaces.place(named: "cafe", in: places)?.address == "2 Side St")
+        #expect(SavedPlaces.place(named: "Central Station", in: places) == nil)
+    }
+
+    @Test func instructionsNameThePlaces() {
+        #expect(PersonalDataTools.savedPlacesInstructions(places).contains("\"Gym\", \"Café\""))
+        #expect(PersonalDataTools.savedPlacesInstructions([]).contains("no saved places"))
+    }
+}

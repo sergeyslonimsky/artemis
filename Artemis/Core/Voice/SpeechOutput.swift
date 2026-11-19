@@ -1,5 +1,4 @@
 @preconcurrency import AVFoundation
-import NaturalLanguage
 import Synchronization
 
 /// Reads replies aloud sentence by sentence, so speech starts while the reply is still streaming.
@@ -78,7 +77,7 @@ final class SpeechOutput {
     /// The best installed voice for the sentence's language (Premium > Enhanced > default).
     private func voice(for text: String) -> AVSpeechSynthesisVoice? {
         let language: String
-        if text.count >= 12, let detected = Self.language(of: text) {
+        if let detected = Locale.Language(detectedIn: text, minimumLength: 12)?.languageCode?.identifier {
             language = detected
             lastLanguage = detected
         } else {
@@ -109,13 +108,6 @@ final class SpeechOutput {
             if lhsRegion != rhsRegion { return !lhsRegion }
             return lhs.identifier > rhs.identifier
         }
-    }
-
-    private static func language(of text: String) -> String? {
-        let recognizer = NLLanguageRecognizer()
-        recognizer.processString(text)
-        guard let language = recognizer.dominantLanguage, language != .undetermined else { return nil }
-        return language.rawValue
     }
 
     /// Whether replies in this language will sound natural (an Enhanced or Premium voice is installed).

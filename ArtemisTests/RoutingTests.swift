@@ -108,6 +108,14 @@ struct ClassifierDecisionTests {
         #expect(RequestClassifier.decision(for: .places, availableTools: []) == .cloud(.freshInformation))
     }
 
+    @Test func travelUsesLocationCalendarAndAlarms() {
+        #expect(RequestClassifier.decision(for: .travel, availableTools: allTools) == .onDevice(.travel))
+        #expect(RouteReason.travel.toolGroups == [.places, .schedule, .alarms])
+        #expect(RouteReason.travel.keepsDataOnDevice)
+        // Without location there's no starting point: maps on the web can still help.
+        #expect(RequestClassifier.decision(for: .travel, availableTools: []) == .cloud(.freshInformation))
+    }
+
     @Test func disabledPersonalToolsStayOnDevice() {
         // The cloud can't see the user's data either; the on-device model explains.
         #expect(RequestClassifier.decision(for: .personalData, availableTools: []) == .onDevice(.deviceAction))

@@ -59,6 +59,19 @@ struct DatabaseTests {
         #expect(try database.fetchMessages(chatId: chat.id).map(\.content) == ["1"])
     }
 
+    @Test func recognizedImageTextPersists() throws {
+        let database = try makeDatabase()
+        let chat = try database.createChat(title: "Test")
+        let scan = Attachment(filename: "scan.jpg", mime: "image/jpeg", kind: .image, isScan: true, data: Data([1]))
+        let photo = Attachment(filename: "photo.jpg", mime: "image/jpeg", kind: .image, data: Data([2]))
+        try database.addMessage(Message(chatId: chat.id, role: .user, content: "", attachments: [scan, photo]))
+        try database.setRecognizedText("TOTAL 9.99", attachmentId: scan.id)
+
+        let loaded = try #require(try database.fetchMessages(chatId: chat.id).first).attachments
+        #expect(loaded.map(\.recognizedText) == ["TOTAL 9.99", nil])
+        #expect(loaded.map(\.isScan) == [true, false])
+    }
+
     @Test func extrasAndDraftStatusPersist() throws {
         let database = try makeDatabase()
         let chat = try database.createChat(title: "Test")

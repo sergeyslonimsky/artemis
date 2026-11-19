@@ -14,12 +14,7 @@ final class AppDatabase: Sendable {
         self.dbWriter = dbWriter
         self.apiKeys = apiKeys
 
-        if let attachmentsDirectory = attachmentsDirectory {
-            self.attachmentsDirectory = attachmentsDirectory
-        } else {
-            let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            self.attachmentsDirectory = appSupport.appendingPathComponent("Artemis/attachments", isDirectory: true)
-        }
+        self.attachmentsDirectory = attachmentsDirectory ?? Self.directory.appending(path: "attachments", directoryHint: .isDirectory)
 
         try FileManager.default.createDirectory(at: self.attachmentsDirectory, withIntermediateDirectories: true)
         try Self.migrator.migrate(dbWriter)
@@ -27,21 +22,19 @@ final class AppDatabase: Sendable {
         try markInterruptedStreamsFailed()
     }
 
+    /// Application Support folder holding the database file and attachments.
+    private static let directory = URL.applicationSupportDirectory.appending(path: "Artemis", directoryHint: .isDirectory)
+
     /// Shared standard on-disk database instance for the application.
     static let shared: AppDatabase = {
         do {
-            let fileManager = FileManager.default
-            let appSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            let directoryURL = appSupportURL.appendingPathComponent("Artemis", isDirectory: true)
-            try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
-            let databaseURL = directoryURL.appendingPathComponent("artemis.sqlite")
             var config = Configuration()
             config.qos = .userInitiated
             // WAL mode is default for DatabasePool in GRDB
-            let dbPool = try DatabasePool(path: databaseURL.path, configuration: config)
-            let attachmentsDir = directoryURL.appendingPathComponent("attachments", isDirectory: true)
-            return try AppDatabase(dbPool, attachmentsDirectory: attachmentsDir)
+            let dbPool = try DatabasePool(path: directory.appending(path: "artemis.sqlite").path(percentEncoded: false), configuration: config)
+            return try AppDatabase(dbPool)
         } catch {
             fatalError("Failed to initialize AppDatabase: \(error)")
         }
@@ -286,6 +279,14 @@ final class AppDatabase: Sendable {
                     arguments: [json, row["id"] as Int64]
                 )
             }
+        }
+
+        // Migration 16: OCR text of images, so the on-device model can see them in later turns
+        migrator.registerMigration("v16_attachment_text") { db in
+            try db.execute(sql: """
+            ALTER TABLE attachments ADD COLUMN recognized_text TEXT;
+            ALTER TABLE attachments ADD COLUMN is_scan INTEGER NOT NULL DEFAULT 0;
+            """)
         }
 
         return migrator

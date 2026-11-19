@@ -8,11 +8,15 @@ enum PersonalDataSource: String, Codable, Sendable, CaseIterable {
     case location
     case weather
     case health
+    /// Not the user's data, but reported the same way: the turn was translated on the device.
+    case translation
+    /// Only shown while the text in attached images is read before an on-device reply.
+    case imageText
 
     /// Private sources keep the reply on the device: it isn't escalated or shown to the cloud.
     /// Weather for a named place says nothing about the user (their location is its own source).
     var isPrivate: Bool {
-        self != .weather
+        self != .weather && self != .translation && self != .imageText
     }
 
     /// "Checked your calendar" — shown under the reply.
@@ -24,6 +28,8 @@ enum PersonalDataSource: String, Codable, Sendable, CaseIterable {
         case .location: "Used your location"
         case .weather: "Checked the weather"
         case .health: "Checked your health data"
+        case .translation: "Translated on this device"
+        case .imageText: "Read the text in an image"
         }
     }
 
@@ -36,6 +42,8 @@ enum PersonalDataSource: String, Codable, Sendable, CaseIterable {
         case .location: "Finding your location…"
         case .weather: "Checking the weather…"
         case .health: "Checking your health data…"
+        case .translation: "Translating…"
+        case .imageText: "Reading the image…"
         }
     }
 
@@ -47,6 +55,8 @@ enum PersonalDataSource: String, Codable, Sendable, CaseIterable {
         case .location: "location"
         case .weather: "cloud.sun"
         case .health: "heart"
+        case .translation: "translate"
+        case .imageText: "text.viewfinder"
         }
     }
 }
@@ -91,7 +101,7 @@ enum ToolGroup: String, Codable, Sendable, CaseIterable, Identifiable {
         case .contacts: "Look up people and draft calls, messages and emails."
         case .alarms: "Draft alarms and timers."
         case .weather: "Current weather and forecast from Open-Meteo; only approximate coordinates are sent."
-        case .places: "Your current location and places nearby."
+        case .places: "Your current location, places nearby and travel times."
         case .health: "Steps, sleep, heart rate, workouts and more."
         }
     }

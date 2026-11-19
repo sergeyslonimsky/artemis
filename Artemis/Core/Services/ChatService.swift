@@ -210,6 +210,7 @@ final class ChatService {
             database: database, chatId: turn.chatId, messageId: placeholder.id, backend: backend,
             preset: turn.options.preset,
             toolGroups: decision.reason.toolGroups,
+            offersTranslation: decision.reason == .writing,
             isVoice: voiceChats.contains(turn.chatId)
         )
         let token = turn.token

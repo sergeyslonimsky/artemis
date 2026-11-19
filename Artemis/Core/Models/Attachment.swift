@@ -15,11 +15,16 @@ struct Attachment: Identifiable, Codable, Equatable, Sendable {
     var kind: AttachmentKind
     var size: Int
     var createdAt: Date
+    /// Text Vision found in an image: `nil` until recognized, empty when there is none.
+    /// Lets the on-device model see an earlier image again without the pixels.
+    var recognizedText: String?
+    /// Taken with the document scanner: certainly a document, so its text is the content.
+    var isScan: Bool
     /// Bytes for sending; stored in a file next to the database, not in the row.
     var data: Data? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, messageId, filename, mime, kind, size, createdAt
+        case id, messageId, filename, mime, kind, size, createdAt, recognizedText, isScan
     }
 
     init(
@@ -30,6 +35,8 @@ struct Attachment: Identifiable, Codable, Equatable, Sendable {
         kind: AttachmentKind,
         size: Int = 0,
         createdAt: Date = Date(),
+        recognizedText: String? = nil,
+        isScan: Bool = false,
         data: Data? = nil
     ) {
         self.id = id
@@ -39,6 +46,8 @@ struct Attachment: Identifiable, Codable, Equatable, Sendable {
         self.kind = kind
         self.size = size == 0 ? (data?.count ?? 0) : size
         self.createdAt = createdAt
+        self.recognizedText = recognizedText
+        self.isScan = isScan
         self.data = data
     }
 
@@ -72,5 +81,6 @@ extension Attachment: AppRecord {
         static let id = Column("id")
         static let messageId = Column("message_id")
         static let createdAt = Column("created_at")
+        static let recognizedText = Column("recognized_text")
     }
 }
