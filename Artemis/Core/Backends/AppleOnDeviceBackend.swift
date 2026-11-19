@@ -211,9 +211,11 @@ struct AppleOnDeviceBackend: ChatBackend {
         var content = ""
         var reasoning = ""
         var outputTokens: Int?
+        var entries: ArraySlice<Transcript.Entry> = []
 
         for try await snapshot in session.streamResponse(to: request.prompt, options: options) {
             try Task.checkCancellation()
+            entries = snapshot.transcriptEntries
 
             let newReasoning = reasoningText(in: snapshot.transcriptEntries)
             if let delta = appendedText(from: reasoning, to: newReasoning) {
@@ -239,6 +241,10 @@ struct AppleOnDeviceBackend: ChatBackend {
             for draft in heldDrafts.withLock({ $0 }) {
                 continuation.yield(.actionDraft(await translation.draft(draft)))
             }
+        }
+
+        for call in toolCalls(in: entries) {
+            continuation.yield(.toolCall(call))
         }
 
         if let conversationId = turn.conversationId, let replyId = turn.replyId, !Task.isCancelled {
@@ -403,6 +409,24 @@ struct AppleOnDeviceBackend: ChatBackend {
             guard case .reasoning(let reasoning) = entry else { return nil }
             return reasoning.segments.text
         }.joined(separator: "\n")
+    }
+
+    /// The turn's tool calls with what each returned.
+    static func toolCalls(in entries: ArraySlice<Transcript.Entry>) -> [ToolCallRecord] {
+        var outputs: [String: String] = [:]
+        for case .toolOutput(let output) in entries {
+            outputs[output.id] = output.segments.text
+        }
+        return entries.flatMap { entry -> [ToolCallRecord] in
+            guard case .toolCalls(let calls) = entry else { return [] }
+            return calls.map { call in
+                ToolCallRecord(
+                    name: call.toolName,
+                    arguments: call.arguments.jsonString,
+                    output: String((outputs[call.id] ?? "").prefix(ToolCallRecord.maxOutputLength))
+                )
+            }
+        }
     }
 
     /// The suffix added since the previous snapshot; `nil` if nothing new.

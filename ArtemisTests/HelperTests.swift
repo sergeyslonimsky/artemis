@@ -157,6 +157,25 @@ struct SavedPlacesTests {
         #expect(SavedPlaces.place(named: "Central Station", in: places) == nil)
     }
 
+    @Test func namedPlaceWinsOverNextEvent() {
+        #expect(TravelTimeTool.destination(.nextEvent, place: "Gym") == .place)
+        #expect(TravelTimeTool.destination(.nextEvent, place: "") == .nextEvent)
+        #expect(TravelTimeTool.destination(.nextEvent, place: "my next meeting") == .nextEvent)
+        #expect(TravelTimeTool.destination(.place, place: "Work") == .place)
+    }
+
+    @Test func arrivalOnAWrongDayMovesToToday() throws {
+        let calendar = Calendar.current
+        let now = try #require(calendar.date(from: DateComponents(year: 2026, month: 11, day: 19, hour: 10, minute: 30)))
+        let yesterdayEvening = try #require(calendar.date(from: DateComponents(year: 2026, month: 11, day: 18, hour: 18)))
+        let todayEvening = try #require(calendar.date(from: DateComponents(year: 2026, month: 11, day: 19, hour: 18)))
+        #expect(TravelTimeTool.correctingDay(of: yesterdayEvening, now: now) == todayEvening)
+        // Already passed today: too late, not tomorrow.
+        let thisMorning = try #require(calendar.date(from: DateComponents(year: 2026, month: 11, day: 19, hour: 9)))
+        #expect(TravelTimeTool.correctingDay(of: thisMorning, now: now) == thisMorning)
+        #expect(TravelTimeTool.correctingDay(of: todayEvening, now: now) == todayEvening)
+    }
+
     @Test func instructionsNameThePlaces() {
         #expect(PersonalDataTools.savedPlacesInstructions(places).contains("\"Gym\", \"Café\""))
         #expect(PersonalDataTools.savedPlacesInstructions([]).contains("no saved places"))

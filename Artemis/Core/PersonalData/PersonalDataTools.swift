@@ -68,8 +68,11 @@ enum PersonalDataTools {
         if groups.contains(.places) {
             lines.append(savedPlacesInstructions(SavedPlaces.load()))
         }
-        if groups.isSuperset(of: [.places, .schedule]) {
+        if groups.contains(.places) {
             lines.append("For a trip to the user's next event, call getTravelTime with the nextEvent destination: it finds the event.")
+        }
+        if groups.isSuperset(of: [.places, .alarms]) {
+            lines.append("For an alarm to leave in time, call getTravelTime first, then draftAlarm at the time it says to leave.")
         }
         if groups.contains(where: { [.schedule, .contacts, .alarms].contains($0) }) {
             lines.append("You can't do these things yourself: a draft tool shows a card the user confirms. "
@@ -85,7 +88,7 @@ enum PersonalDataTools {
             + "they can save it in Settings › Device data & actions › Your places."
         guard !places.isEmpty else { return "The user has no saved places. " + ask }
         let names = places.map { "\"\($0.name)\"" }.joined(separator: ", ")
-        return "The user's saved places, to pass to getTravelTime by name: \(names). " + ask
+        return "The user's saved places, to pass to getTravelTime by name as the start or the place: \(names). " + ask
     }
 
     /// Parses `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM` in the user's time zone.

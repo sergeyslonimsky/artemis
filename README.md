@@ -93,6 +93,18 @@ xcodebuild test -project Artemis.xcodeproj -scheme Artemis \
   -destination 'platform=iOS Simulator,name=iPhone 17'
 ```
 
+Model evals run requests through the real classifier and on-device model and check which tools
+it calls (`ArtemisTests/OnDeviceModelEvals.swift`). The simulator can't run the model, so they
+need a device with Apple Intelligence and are opt-in:
+
+```sh
+TEST_RUNNER_RUN_MODEL_EVALS=1 xcodebuild test -project Artemis.xcodeproj -scheme Artemis \
+  -destination 'id=<device UDID>' -only-testing:ArtemisTests/OnDeviceModelEvals
+```
+
+Run them after changing tools, their descriptions or the instructions: a fix for one request can
+break another.
+
 ## License
 
 [MIT](LICENSE)

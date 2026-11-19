@@ -9,6 +9,8 @@ enum LLMEvent: Sendable, Equatable {
     case toolStarted(PersonalDataSource)
     /// The on-device model proposed an action for the user to confirm.
     case actionDraft(ActionDraft)
+    /// The on-device model called a tool; recorded for debugging, not shown.
+    case toolCall(ToolCallRecord)
 }
 
 /// Failures reported by an OpenAI-compatible endpoint.

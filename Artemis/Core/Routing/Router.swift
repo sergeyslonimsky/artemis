@@ -195,6 +195,7 @@ enum RequestCategory {
     case weather
     case places
     case travel
+    case leaveAlarm
     case health
     case math
     case freshInformation
@@ -227,6 +228,7 @@ enum RequestClassifier {
         - weather: the weather or forecast, here or in a named place.
         - places: the user's current location, or finding places such as shops or restaurants nearby or in a named place.
         - travel: how long it takes to get somewhere, directions, or when to leave to arrive on time.
+        - leaveAlarm: an alarm or a reminder to leave in time to get somewhere.
         - health: the user's own steps, sleep, heart rate, workouts, weight or other activity and health data.
         - deviceAction: asks to change a device setting or control another app.
         - math: any calculation, unit conversion with numbers, percentages, equations or word problems.
@@ -250,7 +252,9 @@ enum RequestClassifier {
         "where am I" -> places
         "find a pharmacy nearby" -> places
         "how long does it take to drive to work" -> travel
+        "how long from home to the office by bus" -> travel
         "when should I leave for my 3pm meeting" -> travel
+        "set an alarm so I leave in time for my 3pm meeting" -> leaveAlarm
         "how did I sleep this week" -> health
         "how many steps did I walk yesterday" -> health
         "turn on dark mode" -> deviceAction
@@ -295,6 +299,8 @@ enum RequestClassifier {
         case .weather: tool(.weather)
         case .places: tool(.places)
         case .travel: availableTools.contains(.places) ? .onDevice(.travel) : .cloud(.freshInformation)
+        // Without location the leave time is unknown: a plain alarm is the best on-device answer.
+        case .leaveAlarm: availableTools.contains(.places) ? .onDevice(.travelAlarm) : tool(.alarms)
         case .writing: .onDevice(.writing)
         case .math: .cloud(.math)
         case .freshInformation: .cloud(.freshInformation)

@@ -69,6 +69,8 @@ struct ReplyJob: Sendable {
                     await onActivity(source)
                 case .actionDraft(let draft):
                     outcome.extras.drafts.append(draft)
+                case .toolCall(let call):
+                    outcome.extras.toolCalls.append(call)
                 }
             }
             // Backends may end the stream quietly when cancelled.

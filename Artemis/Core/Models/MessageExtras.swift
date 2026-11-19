@@ -164,17 +164,38 @@ struct ActionDraft: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
+/// A tool the on-device model called, kept to see why a reply went wrong.
+struct ToolCallRecord: Codable, Equatable, Sendable {
+    var name: String
+    /// The arguments as JSON.
+    var arguments: String
+    /// What the tool returned, shortened.
+    var output: String
+
+    static let maxOutputLength = 1000
+}
+
 /// Extra facts about an assistant reply, stored as JSON in `messages.extras`.
 struct MessageExtras: Codable, Equatable, Sendable {
     var personalDataUsed: [PersonalDataSource] = []
     var drafts: [ActionDraft] = []
+    var toolCalls: [ToolCallRecord] = []
 
-    init(personalDataUsed: [PersonalDataSource] = [], drafts: [ActionDraft] = []) {
+    init(personalDataUsed: [PersonalDataSource] = [], drafts: [ActionDraft] = [], toolCalls: [ToolCallRecord] = []) {
         self.personalDataUsed = personalDataUsed
         self.drafts = drafts
+        self.toolCalls = toolCalls
     }
 
-    var isEmpty: Bool { personalDataUsed.isEmpty && drafts.isEmpty }
+    /// Replies stored before a field existed lack its key.
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        personalDataUsed = try container.decodeIfPresent([PersonalDataSource].self, forKey: .personalDataUsed) ?? []
+        drafts = try container.decodeIfPresent([ActionDraft].self, forKey: .drafts) ?? []
+        toolCalls = try container.decodeIfPresent([ToolCallRecord].self, forKey: .toolCalls) ?? []
+    }
+
+    var isEmpty: Bool { personalDataUsed.isEmpty && drafts.isEmpty && toolCalls.isEmpty }
 
     /// Whether the reply was built from data that must stay on the device.
     var usedPrivateData: Bool { personalDataUsed.contains(where: \.isPrivate) }

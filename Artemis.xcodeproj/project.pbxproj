@@ -58,6 +58,7 @@
 		7DB952A64BE576BF5FBCC786 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8947436D59599494BD9C20D5 /* ShareViewController.swift */; };
 		8026D509DE3C82F33D707527 /* ShimmerModifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2DD9FC347DC05D0156997A9 /* ShimmerModifier.swift */; };
 		8D372E62D8F5C6E9E16C9A54 /* LLMClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4ED8EE9616E76B9EFE32E06 /* LLMClient.swift */; };
+		9165FA5CC431113C4443495C /* OnDeviceModelEvals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3685A4AA50E8161DC741867D /* OnDeviceModelEvals.swift */; };
 		98772A65D040F57DA39553F1 /* APIKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFA3555199FA3736282E4138 /* APIKeyStore.swift */; };
 		9B83A3B819911C10FF6C8D64 /* Chat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7209AFE468C9DF36112B8200 /* Chat.swift */; };
 		9C6AFFD56C971ADBD19C1C09 /* PersonalDataTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C07B53913AF7A7B45BAE3BD /* PersonalDataTools.swift */; };
@@ -168,6 +169,7 @@
 		2FBE83C26025B834891F6AB0 /* ArtemisControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtemisControls.swift; sourceTree = "<group>"; };
 		34FD4F9B238BE5767E3E1271 /* AttachmentProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentProcessor.swift; sourceTree = "<group>"; };
 		363F9435EA71FEAB2A5B134A /* AppDatabase+Queries.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppDatabase+Queries.swift"; sourceTree = "<group>"; };
+		3685A4AA50E8161DC741867D /* OnDeviceModelEvals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnDeviceModelEvals.swift; sourceTree = "<group>"; };
 		36D61705FD31BB525F6F3039 /* SavedPlaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedPlaces.swift; sourceTree = "<group>"; };
 		3C8DBA6B7CC1351C7F3F6CA0 /* SafariPage.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = SafariPage.js; sourceTree = "<group>"; };
 		3D96933A409DC82B3D08AECC /* OnDeviceTranslator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnDeviceTranslator.swift; sourceTree = "<group>"; };
@@ -357,6 +359,7 @@
 				8C316D108D2D87FB19D0485C /* HelperTests.swift */,
 				5FEEA77119B79B630D159669 /* ImageTextTests.swift */,
 				5BAEE6DED6A54DF52822A6A3 /* NetworkTests.swift */,
+				3685A4AA50E8161DC741867D /* OnDeviceModelEvals.swift */,
 				91E158CB01B11251811E8517 /* ReplyJobTests.swift */,
 				829F4CF26D483C1118B3A595 /* RoutingTests.swift */,
 				87E712F7497FAA6E08075EEE /* TestSupport.swift */,
@@ -761,6 +764,7 @@
 				4F7D6123A728FEA2E1AC3560 /* HelperTests.swift in Sources */,
 				48B099A0294274A2D0CB5CB2 /* ImageTextTests.swift in Sources */,
 				FB27F64C67E6690E83254155 /* NetworkTests.swift in Sources */,
+				9165FA5CC431113C4443495C /* OnDeviceModelEvals.swift in Sources */,
 				DAA30222B214114B0966243A /* ReplyJobTests.swift in Sources */,
 				7ACB53FCD51C53795FECC674 /* RoutingTests.swift in Sources */,
 				F470EFE97BBF2EAEB2BA4696 /* TestSupport.swift in Sources */,
