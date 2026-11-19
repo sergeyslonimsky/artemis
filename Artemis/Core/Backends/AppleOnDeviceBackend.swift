@@ -101,7 +101,18 @@ struct AppleOnDeviceBackend: ChatBackend {
             that part, then help with everything else. Don't mention other models or services. \
             If you're unsure about a fact, say so briefly.
             """
-        return tools.isEmpty ? base : base + "\n\n" + PersonalDataTools.instructions(for: tools)
+        guard !tools.isEmpty else { return base }
+        return base + "\n\n" + upcomingDates(from: now) + "\n" + PersonalDataTools.instructions(for: tools)
+    }
+
+    /// The model can't count weekdays: "on Monday" became the next day. Tools take ISO dates.
+    static func upcomingDates(from now: Date) -> String {
+        let calendar = Calendar.current
+        let days = (1...7).compactMap { calendar.date(byAdding: .day, value: $0, to: now) }.map { day in
+            let name = day.formatted(Date.FormatStyle(locale: Locale(identifier: "en_US_POSIX")).weekday(.wide))
+            return "\(name) \(day.formatted(.iso8601.year().month().day()))"
+        }
+        return "Today's date is \(now.formatted(.iso8601.year().month().day())); the next days: \(days.joined(separator: ", "))."
     }
 
     /// Without this the model took "rescan the receipt" for an action it can't take, though the
@@ -114,7 +125,13 @@ struct AppleOnDeviceBackend: ChatBackend {
 
     private static let logger = Logger(subsystem: "com.artemis.ios", category: "AppleOnDeviceBackend")
 
-    init() {}
+    /// Builds the turn's tools; evals swap in stubs to test the model's choices alone.
+    typealias ToolFactory = @Sendable (Set<ToolGroup>, ToolEventSink) -> [any Tool]
+    private let makeTools: ToolFactory
+
+    init(makeTools: @escaping ToolFactory = PersonalDataTools.tools) {
+        self.makeTools = makeTools
+    }
 
     var descriptor: BackendDescriptor {
         BackendDescriptor(kind: .onDevice)
@@ -123,7 +140,7 @@ struct AppleOnDeviceBackend: ChatBackend {
     func stream(_ turn: ChatTurn) -> AsyncThrowingStream<LLMEvent, Error> {
         .task { continuation in
             do {
-                try await Self.generate(turn, into: continuation)
+                try await Self.generate(turn, makeTools: makeTools, into: continuation)
             } catch {
                 throw OnDeviceError.map(error)
             }
@@ -132,7 +149,11 @@ struct AppleOnDeviceBackend: ChatBackend {
 
     // MARK: - Generation
 
-    private static func generate(_ turn: ChatTurn, into continuation: AsyncThrowingStream<LLMEvent, Error>.Continuation) async throws {
+    private static func generate(
+        _ turn: ChatTurn,
+        makeTools: ToolFactory,
+        into continuation: AsyncThrowingStream<LLMEvent, Error>.Continuation
+    ) async throws {
         let status = OnDeviceModelStatus.current
         guard status.isAvailable else { throw OnDeviceError.unavailable(status) }
 
@@ -170,7 +191,7 @@ struct AppleOnDeviceBackend: ChatBackend {
             sink = cached.sink
         } else {
             sink = ToolEventSink()
-            var tools = PersonalDataTools.tools(for: turn.toolGroups, sink: sink)
+            var tools = makeTools(turn.toolGroups, sink)
             if turn.offersTranslation {
                 tools.append(TranslateTool(sink: sink))
             }
@@ -213,24 +234,33 @@ struct AppleOnDeviceBackend: ChatBackend {
         var outputTokens: Int?
         var entries: ArraySlice<Transcript.Entry> = []
 
-        for try await snapshot in session.streamResponse(to: request.prompt, options: options) {
-            try Task.checkCancellation()
-            entries = snapshot.transcriptEntries
+        do {
+            for try await snapshot in session.streamResponse(to: request.prompt, options: options) {
+                try Task.checkCancellation()
+                entries = snapshot.transcriptEntries
 
-            let newReasoning = reasoningText(in: snapshot.transcriptEntries)
-            if let delta = appendedText(from: reasoning, to: newReasoning) {
-                continuation.yield(.reasoning(delta))
-            }
-            reasoning = newReasoning
-
-            if let delta = appendedText(from: content, to: snapshot.content) {
-                let output = try await translation?.reply(delta) ?? delta
-                if !output.isEmpty {
-                    continuation.yield(.content(output))
+                let newReasoning = reasoningText(in: snapshot.transcriptEntries)
+                if let delta = appendedText(from: reasoning, to: newReasoning) {
+                    continuation.yield(.reasoning(delta))
                 }
+                reasoning = newReasoning
+
+                if let delta = appendedText(from: content, to: snapshot.content) {
+                    let output = try await translation?.reply(delta) ?? delta
+                    if !output.isEmpty {
+                        continuation.yield(.content(output))
+                    }
+                }
+                content = snapshot.content
+                outputTokens = snapshot.usage.output.totalTokenCount
             }
-            content = snapshot.content
-            outputTokens = snapshot.usage.output.totalTokenCount
+        } catch {
+            // The model failed partway: the reply so far stays, in the user's language. A stopped
+            // reply keeps only its finished paragraphs, since nobody reads the stream anymore.
+            if let translation, !Task.isCancelled, let rest = try? await translation.finishReply(), !rest.isEmpty {
+                continuation.yield(.content(rest))
+            }
+            throw error
         }
 
         if let translation {

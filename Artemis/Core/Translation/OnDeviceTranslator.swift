@@ -83,21 +83,68 @@ final class OnDeviceTranslator {
 
     // MARK: - Markdown
 
-    /// Translates Markdown one line at a time, as the reply streams: code blocks stay as they are,
-    /// and list, heading and quote markers are kept out of the translation.
-    struct MarkdownLines {
-        private var inCodeBlock = false
+    /// A piece of a reply to translate on its own.
+    enum MarkdownBlock: Equatable {
+        /// Code and blank lines.
+        case verbatim(String)
+        /// Consecutive plain lines, translated together for context.
+        case paragraph(String)
+        /// A list item, heading or quote: its marker stays.
+        case item(marker: String, text: String)
 
-        mutating func translate(_ line: String, with translator: OnDeviceTranslator) async throws -> String {
-            if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
-                inCodeBlock.toggle()
-                return line
+        /// Just past the last blank line outside a code block: the text before it won't change
+        /// as the reply streams on. `nil` while there's none.
+        static func completedEnd(of text: String) -> String.Index? {
+            var inCodeBlock = false
+            var end: String.Index?
+            var lineStart = text.startIndex
+            while let newline = text[lineStart...].firstIndex(of: "\n") {
+                let line = text[lineStart..<newline].trimmingCharacters(in: .whitespaces)
+                if line.hasPrefix("```") {
+                    inCodeBlock.toggle()
+                } else if line.isEmpty, !inCodeBlock, lineStart > text.startIndex {
+                    end = text.index(after: newline)
+                }
+                lineStart = text.index(after: newline)
             }
-            guard !inCodeBlock else { return line }
-            let (marker, text) = Self.split(line)
-            return marker + (try await translator.fromEnglish(markdown: text))
+            return end
         }
 
+        static func blocks(of text: String) -> [MarkdownBlock] {
+            var blocks: [MarkdownBlock] = []
+            var paragraph: [String] = []
+            var inCodeBlock = false
+            func flush() {
+                if !paragraph.isEmpty { blocks.append(.paragraph(paragraph.joined(separator: "\n"))) }
+                paragraph = []
+            }
+            for line in text.components(separatedBy: "\n") {
+                if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+                    flush()
+                    inCodeBlock.toggle()
+                    blocks.append(.verbatim(line))
+                    continue
+                }
+                if inCodeBlock || line.trimmingCharacters(in: .whitespaces).isEmpty {
+                    flush()
+                    blocks.append(.verbatim(line))
+                    continue
+                }
+                let (marker, text) = MarkdownLines.split(line)
+                if marker.isEmpty {
+                    paragraph.append(line)
+                } else {
+                    flush()
+                    blocks.append(.item(marker: marker, text: text))
+                }
+            }
+            flush()
+            return blocks
+        }
+    }
+
+    /// List, heading and quote markers, kept out of the translation.
+    enum MarkdownLines {
         /// "  - **Bold** text" → ("  - ", "**Bold** text").
         static func split(_ line: String) -> (marker: String, text: String) {
             guard let match = line.prefixMatch(of: /\s*(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+|>\s*)*/) else {

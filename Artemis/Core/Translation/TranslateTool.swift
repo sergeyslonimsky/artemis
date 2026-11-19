@@ -24,17 +24,17 @@ struct TranslateTool: Tool {
         let text = arguments.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return "There is no text to translate." }
         guard let target = await Self.language(named: arguments.targetLanguage) else {
-            return "\(arguments.targetLanguage) isn't a language on-device translation knows. Translate it yourself."
+            return "\(arguments.targetLanguage) isn't a language on-device translation knows. Write the translation in your reply yourself."
         }
         guard let source = Locale.Language(detectedIn: text) else {
-            return "Couldn't tell which language the text is in. Translate it yourself."
+            return "Couldn't tell which language the text is in. Write the translation in your reply yourself."
         }
         if source.languageCode == target.languageCode {
             return "The text is already in \(target.englishName)."
         }
 
         guard await LanguageAvailability().status(from: source, to: target) == .installed else {
-            return "Translation into \(target.englishName) isn't downloaded on this device. Translate it yourself, "
+            return "Translation into \(target.englishName) isn't downloaded on this device. Write the translation in your reply yourself, "
                 + "and tell the user they can download the language in Settings › On-device model › Translation."
         }
         sink.send(.started(.translation))
@@ -42,7 +42,7 @@ struct TranslateTool: Tool {
             let translated = try await TranslationSession(installedSource: source, target: target).translate(text).targetText
             return "Translation into \(target.englishName):\n\(translated)"
         } catch {
-            return "On-device translation failed: \(error.localizedDescription). Translate it yourself."
+            return "On-device translation failed: \(error.localizedDescription). Write the translation in your reply yourself."
         }
     }
 

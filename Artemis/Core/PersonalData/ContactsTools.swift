@@ -164,7 +164,7 @@ struct DraftContactActionTool: Tool {
         case .email: "An email to"
         default: "A message to"
         }
-        return "\(what) \(person.name) (\(address)) is ready. The user confirms it below your reply; nothing is sent yet."
+        return "\(what) \(person.name) (\(address)) is ready. The user confirms it on the card shown with your reply; nothing is sent yet."
     }
 
     /// Mobile numbers first: they can take both calls and texts.

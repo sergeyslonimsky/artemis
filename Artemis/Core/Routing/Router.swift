@@ -139,9 +139,6 @@ struct RoutingRules: Sendable {
         if estimatedTokens(of: message) > onDeviceContextSize / 2 {
             return .cloud(.longInput)
         }
-        if message.attachments.isEmpty && Self.isSmallTalk(message.content) {
-            return .onDevice(.smallTalk)
-        }
         return nil
     }
 
@@ -170,14 +167,6 @@ struct RoutingRules: Sendable {
         guard attachment.kind == .document, let type = UTType(mimeType: attachment.mime) else { return false }
         return type.conforms(to: .text) || type.conforms(to: .json)
     }
-
-    /// Greetings and acknowledgements: a few words, no question, no numbers.
-    static func isSmallTalk(_ text: String) -> Bool {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let words = trimmed.split(whereSeparator: \.isWhitespace)
-        return !words.isEmpty && words.count <= 4 && !trimmed.contains("?")
-            && !trimmed.contains(where: \.isNumber) && trimmed.count <= 40
-    }
 }
 
 // MARK: - Classifier
@@ -188,6 +177,7 @@ enum RequestCategory {
     case smallTalk
     case simpleQuestion
     case writing
+    case translation
     case deviceAction
     case personalData
     case contacts
@@ -219,7 +209,8 @@ enum RequestClassifier {
         Classify the user's latest request into exactly one category:
         - smallTalk: greetings, thanks, chit-chat.
         - simpleQuestion: a short factual or everyday question with a well-known, stable answer.
-        - writing: rewrite, summarize, translate between common languages, fix grammar, or draft a short text the user provides context for.
+        - writing: rewrite, summarize, fix grammar, or draft a short text the user provides context for.
+        - translation: translate text into another language.
         - personalData: about the user's own schedule, calendar events, meetings, plans or reminders/to-dos, \
         including adding an event or a reminder.
         - contacts: about a person in the user's contacts (phone, email, birthday, address), or calling, \
@@ -240,11 +231,15 @@ enum RequestClassifier {
         Examples:
         "thanks, that helps" -> smallTalk
         "how many legs does a spider have" -> simpleQuestion
+        "how do I boil an egg" -> simpleQuestion
         "make this email sound more polite: ..." -> writing
+        "translate \"see you tomorrow\" into Spanish" -> translation
         "what do I have tomorrow" -> personalData
         "remind me to buy milk at 6pm" -> personalData
+        "remind me to call mom tomorrow" -> personalData
         "when is Anna's birthday" -> contacts
         "text Mike that I'm running late" -> contacts
+        "call mom" -> contacts
         "wake me up at 7" -> alarm
         "set a timer for 10 minutes" -> alarm
         "what's the weather in Paris tomorrow" -> weather
@@ -262,9 +257,10 @@ enum RequestClassifier {
         "who won the match yesterday" -> freshInformation
         "if a train leaves at 3pm at 80 km/h and another at 4pm at 100 km/h, when does the second catch up" -> complexReasoning
         "what's in this photo (the user attached an image)" -> simpleQuestion
-        "translate the text in this picture to English (the user attached an image)" -> writing
+        "translate the text in this picture to English (the user attached an image)" -> translation
         "summarize this document (the user attached a file)" -> writing
         "write a Swift function that parses ISO dates" -> code
+        "write a script that renames my photos by date" -> code
         "explain the causes of World War I in detail" -> longForm
         """
 
@@ -302,6 +298,7 @@ enum RequestClassifier {
         // Without location the leave time is unknown: a plain alarm is the best on-device answer.
         case .leaveAlarm: availableTools.contains(.places) ? .onDevice(.travelAlarm) : tool(.alarms)
         case .writing: .onDevice(.writing)
+        case .translation: .onDevice(.translation)
         case .math: .cloud(.math)
         case .freshInformation: .cloud(.freshInformation)
         case .complexReasoning: .cloud(.complexReasoning)

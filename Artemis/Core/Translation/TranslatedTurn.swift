@@ -2,13 +2,14 @@ import Foundation
 import os
 
 /// The translation side of an on-device turn in a language the model doesn't speak: the prompt
-/// and history reach the model in English, and the reply is translated back line by line as it
-/// streams. Serves one turn.
+/// and history reach the model in English, and the reply is translated back paragraph by
+/// paragraph as it streams. Serves one turn.
 final class TranslatedTurn {
     private let translator: OnDeviceTranslator
-    /// English the reply hasn't finished a line of yet.
-    private var untranslated = ""
-    private var markdown = OnDeviceTranslator.MarkdownLines()
+    /// English the reply hasn't finished a paragraph of yet.
+    private var english = ""
+    /// Whether the model replied in another language, to show as is; decided once enough text arrived.
+    private var keepsOriginal: Bool?
 
     private static let logger = Logger(subsystem: "com.artemis.ios", category: "TranslatedTurn")
 
@@ -18,14 +19,13 @@ final class TranslatedTurn {
         self.translator = translator
     }
 
-    /// Added to the model's instructions.
-    var instructions: String {
-        let language = translator.language.englishName
-        return """
-            The user writes in \(language). Their messages are machine-translated into English for you, and your reply \
-            is translated back into \(language). Reply in clear, simple English. Keep names, numbers, addresses and code unchanged.
-            """
-    }
+    /// Added to the model's instructions. The language isn't named: told the user writes
+    /// Russian, the model wrote broken Russian, which then went through translation again.
+    let instructions = """
+        The user's messages are machine-translated into English for you, and your reply is translated for them. \
+        Write your reply and everything you pass to tools in clear, simple English only. \
+        Keep names, numbers, addresses and code unchanged.
+        """
 
     func prompt(_ text: String) async throws -> String {
         try await reportingFailure { try await translator.toEnglish(text) }
@@ -36,23 +36,43 @@ final class TranslatedTurn {
         (try? await translator.toEnglish(text)) ?? text
     }
 
-    /// The lines `delta` completes, translated; empty while a line is still being written.
+    /// The reply's paragraphs that `delta` completes, translated; empty while one is still being
+    /// written. Line by line was too little: short lines lost their context ("Alarm set." came
+    /// back as "Audit set").
     func reply(_ delta: String) async throws -> String {
-        untranslated += delta
-        var output = ""
-        while let newline = untranslated.firstIndex(of: "\n") {
-            let line = String(untranslated[..<newline])
-            untranslated.removeSubrange(...newline)
-            output += try await reportingFailure { try await markdown.translate(line, with: translator) } + "\n"
-        }
-        return output
+        english += delta
+        guard let end = OnDeviceTranslator.MarkdownBlock.completedEnd(of: english) else { return "" }
+        let done = String(english[..<end])
+        english.removeSubrange(..<end)
+        return try await translate(done)
     }
 
-    /// The reply's last, unfinished line.
+    /// What's left of the reply once it ends, or fails partway.
     func finishReply() async throws -> String {
-        let rest = untranslated
-        untranslated = ""
-        return try await reportingFailure { try await markdown.translate(rest, with: translator) }
+        let rest = english
+        english = ""
+        return try await translate(rest)
+    }
+
+    /// Paragraphs at once, list items and headings one by one, code as is.
+    private func translate(_ text: String) async throws -> String {
+        // A reply already in another language would come back garbled.
+        if keepsOriginal == nil, let language = Locale.Language(detectedIn: text, minimumLength: 20)?.languageCode {
+            keepsOriginal = language != .english
+        }
+        guard keepsOriginal != true else { return text }
+        var output: [String] = []
+        for block in OnDeviceTranslator.MarkdownBlock.blocks(of: text) {
+            switch block {
+            case .verbatim(let line):
+                output.append(line)
+            case .paragraph(let paragraph):
+                output.append(try await reportingFailure { try await translator.fromEnglish(markdown: paragraph) })
+            case .item(let marker, let item):
+                output.append(marker + (try await reportingFailure { try await translator.fromEnglish(markdown: item) }))
+            }
+        }
+        return output.joined(separator: "\n")
     }
 
     /// Titles and message bodies the user will see in their language.
