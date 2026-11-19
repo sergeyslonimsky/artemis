@@ -52,19 +52,10 @@ struct RoutingRulesTests {
         #expect(rules.evaluate(context(long)) == .cloud(.longInput))
     }
 
-    @Test(arguments: ["hi", "thanks!", "ok cool", "good morning"])
-    func smallTalkStaysOnDevice(_ text: String) {
-        #expect(rules.evaluate(context(text)) == .onDevice(.smallTalk))
-    }
-
-    @Test(arguments: ["what time is it?", "add 2 and 3", "tell me about the history of Rome"])
-    func otherRequestsAreClassified(_ text: String) {
+    /// Short commands ("call mom") looked like small talk to a rule: the classifier decides.
+    @Test(arguments: ["hi", "call mom", "find a pharmacy nearby", "what time is it?", "tell me about the history of Rome"])
+    func requestsAreClassified(_ text: String) {
         #expect(rules.evaluate(context(text)) == nil)
-    }
-
-    @Test func smallTalkWithAttachmentIsClassified() {
-        let image = Artemis.Attachment(filename: "a.jpg", mime: "image/jpeg", kind: .image, data: Data([1]))
-        #expect(rules.evaluate(context("hi", attachments: [image])) == nil)
     }
 
     @Test func cloudAcceptance() {
@@ -94,6 +85,11 @@ struct ClassifierDecisionTests {
         ] {
             #expect(RequestClassifier.decision(for: category, availableTools: allTools) == .cloud(reason))
         }
+    }
+
+    @Test func onlyTranslationOffersTheTranslateTool() {
+        #expect(RequestClassifier.decision(for: .translation, availableTools: allTools) == .onDevice(.translation))
+        #expect(RequestClassifier.decision(for: .writing, availableTools: allTools) == .onDevice(.writing))
     }
 
     @Test func toolCategoriesStayOnDevice() {

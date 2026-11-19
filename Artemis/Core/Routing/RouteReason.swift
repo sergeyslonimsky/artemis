@@ -14,12 +14,14 @@ enum RouteReason: String, Codable, Sendable {
     case onDeviceUnavailable = "on_device_unavailable"
     /// Legacy: kept so replies stored before the classifier ran without a cloud still decode.
     case noCloudProvider = "no_cloud_provider"
-    case smallTalk = "small_talk"
     case cloudCantReadAttachment = "cloud_cant_read_attachment"
 
     // Classifier
+    case smallTalk = "small_talk"
     case simple
     case writing
+    /// The only route with the translation tool: offered for any writing, it translated texts it should have rewritten.
+    case translation
     case deviceAction = "device_action"
     /// Calendar and reminders.
     case personalData = "personal_data"
@@ -50,7 +52,7 @@ enum RouteReason: String, Codable, Sendable {
              .longInput, .onDeviceUnavailable, .freshInformation, .complexReasoning, .math, .code, .longForm,
              .onDeviceFailed, .onDeviceDeclined:
             true
-        case .userSelectedOnDevice, .noCloudProvider, .smallTalk, .cloudCantReadAttachment, .personalData, .simple, .writing, .deviceAction,
+        case .userSelectedOnDevice, .noCloudProvider, .smallTalk, .cloudCantReadAttachment, .personalData, .simple, .writing, .translation, .deviceAction,
              .contacts, .alarm, .weather, .places, .travel, .travelAlarm, .health:
             false
         }
@@ -97,6 +99,7 @@ enum RouteReason: String, Codable, Sendable {
         case .cloudCantReadAttachment: "the selected cloud model can't read this attachment"
         case .simple: "a simple question"
         case .writing: "a writing task"
+        case .translation: "a translation"
         case .deviceAction: "device actions aren't possible from chat"
         case .personalData: "it uses your calendar or reminders, which stay on this device"
         case .contacts: "it uses your contacts, which stay on this device"

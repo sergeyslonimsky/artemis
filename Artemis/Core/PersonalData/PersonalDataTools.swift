@@ -65,6 +65,10 @@ enum PersonalDataTools {
                 "Use getHealthData to read the user's activity, sleep and health data."
             }
         }
+        if !groups.isEmpty {
+            lines.append("Call the tools again for each new question, even a short follow-up: an answer for another "
+                + "place, day or person needs fresh data, never an earlier reply.")
+        }
         if groups.contains(.places) {
             lines.append(savedPlacesInstructions(SavedPlaces.load()))
         }
@@ -76,6 +80,7 @@ enum PersonalDataTools {
         }
         if groups.contains(where: { [.schedule, .contacts, .alarms].contains($0) }) {
             lines.append("You can't do these things yourself: a draft tool shows a card the user confirms. "
+                + "Only call a draft tool when the user asks you to add, set, call or send something. "
                 + "Only say something is ready to confirm if you called a draft tool in this reply; never say "
                 + "you set, added or sent anything. Don't ask for confirmation in words: the card is the confirmation.")
         }
@@ -91,9 +96,16 @@ enum PersonalDataTools {
         return "The user's saved places, to pass to getTravelTime by name as the start or the place: \(names). " + ask
     }
 
-    /// Parses `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM` in the user's time zone.
-    static func parseDate(_ text: String) -> (date: Date, hasTime: Bool)? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// Parses `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM` in the user's time zone, or a relative day
+    /// ("Monday 10:00", "tomorrow"): the model names weekdays right but miscounts their dates.
+    static func parseDate(_ text: String, now: Date = Date()) -> (date: Date, hasTime: Bool)? {
+        var trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // "Friday 2026-11-20 06:30": the date list in the instructions puts weekdays before dates.
+        if let iso = trimmed.firstMatch(of: /\d{4}-\d{2}-\d{2}(?:[T ]\d{1,2}:\d{2})?/) {
+            trimmed = String(trimmed[iso.range.lowerBound...])
+        } else if let relative = parseRelativeDate(trimmed, now: now) {
+            return relative
+        }
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = .current
@@ -110,6 +122,29 @@ enum PersonalDataTools {
             }
         }
         return nil
+    }
+
+    /// "today", "tomorrow" or a weekday (the next one after today), optionally with "HH:MM".
+    private static func parseRelativeDate(_ text: String, now: Date) -> (date: Date, hasTime: Bool)? {
+        guard let match = text.wholeMatch(of: /(?i)(?:next\s+)?([a-z]+)(?:\s+(?:at\s+)?(\d{1,2}):(\d{2}))?/) else { return nil }
+        let calendar = Calendar.current
+        var english = Calendar(identifier: .gregorian)
+        english.locale = Locale(identifier: "en_US_POSIX")
+        let today = calendar.startOfDay(for: now)
+        let word = match.1.lowercased()
+        let day: Date?
+        switch word {
+        case "today": day = today
+        case "tomorrow": day = calendar.date(byAdding: .day, value: 1, to: today)
+        default:
+            guard let weekday = english.weekdaySymbols.firstIndex(where: { $0.lowercased() == word }) else {
+                return nil
+            }
+            day = calendar.nextDate(after: today, matching: DateComponents(weekday: weekday + 1), matchingPolicy: .nextTime)
+        }
+        guard let day else { return nil }
+        guard let hour = match.2.flatMap({ Int($0) }), let minute = match.3.flatMap({ Int($0) }) else { return (day, false) }
+        return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day).map { ($0, true) }
     }
 
     /// A bulleted list of at most `limit` items, then how many were left out: tool output shares
@@ -139,7 +174,7 @@ struct CalendarEventsTool: Tool {
 
     @Generable
     struct Arguments {
-        @Guide(description: "First day to list, as YYYY-MM-DD")
+        @Guide(description: "First day to list, as YYYY-MM-DD, or a weekday the user names, e.g. \"Friday\"")
         var startDate: String
         @Guide(description: "Number of days to list, from 1 to 31")
         var days: Int
@@ -219,7 +254,8 @@ struct DraftEventOrReminderTool: Tool {
         var kind: DraftKind
         @Guide(description: "Short title, e.g. \"Dentist\" or \"Buy milk\"")
         var title: String
-        @Guide(description: "Event start or reminder due time as YYYY-MM-DDTHH:MM in local time, or YYYY-MM-DD without a time")
+        @Guide(description: "Event start or reminder due time as YYYY-MM-DDTHH:MM in local time, or YYYY-MM-DD without a time. "
+            + "For a weekday the user names, write the weekday and time instead, e.g. \"Monday 10:00\"")
         var date: String
         @Guide(description: "Event length in minutes; 0 for reminders or if unknown")
         var durationMinutes: Int
@@ -239,6 +275,6 @@ struct DraftEventOrReminderTool: Tool {
         )
         sink.send(.drafted(draft))
         let what = kind == .event ? "Event" : "Reminder"
-        return "\(what) \"\(draft.title)\" on \(PersonalDataTools.describe(draft.date, withTime: draft.hasTime)) is ready. The user confirms it below your reply; it is not saved yet."
+        return "\(what) \"\(draft.title)\" on \(PersonalDataTools.describe(draft.date, withTime: draft.hasTime)) is ready. The user confirms it on the card shown with your reply; it is not saved yet."
     }
 }

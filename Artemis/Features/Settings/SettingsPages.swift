@@ -98,12 +98,15 @@ struct ProvidersSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sensoryFeedback(.selection, trigger: model.settings.defaultProviderId)
         .sheet(isPresented: $showingAdd) {
-            ProviderEditView(provider: nil, apiKey: "") { provider, apiKey in
+            ProviderEditView(provider: nil, apiKey: "", others: model.providers) { provider, apiKey in
                 model.saveProvider(provider, apiKey: apiKey)
             }
         }
         .sheet(item: $editing) { provider in
-            ProviderEditView(provider: provider, apiKey: model.apiKey(for: provider)) { updated, apiKey in
+            ProviderEditView(
+                provider: provider, apiKey: model.apiKey(for: provider),
+                others: model.providers.filter { $0.id != provider.id }
+            ) { updated, apiKey in
                 model.saveProvider(updated, apiKey: apiKey)
             }
         }

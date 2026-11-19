@@ -20,7 +20,7 @@ struct DraftAlarmTool: Tool {
         var kind: AlarmKind
         @Guide(description: "Short label, e.g. \"Wake up\" or \"Pasta\"")
         var label: String
-        @Guide(description: "Alarm time as YYYY-MM-DDTHH:MM in local time; empty for timers")
+        @Guide(description: "Alarm time as YYYY-MM-DDTHH:MM in local time, or a weekday the user names and the time, e.g. \"Monday 06:30\"; empty for timers")
         var time: String
         @Guide(description: "Timer length in minutes; 0 for alarms")
         var minutes: Int
@@ -33,7 +33,7 @@ struct DraftAlarmTool: Tool {
             guard arguments.minutes > 0 else { return "A timer needs a length in minutes." }
             let draft = ActionDraft(kind: .timer, title: label.isEmpty ? "Timer" : label, durationMinutes: min(arguments.minutes, 24 * 60))
             sink.send(.drafted(draft))
-            return "A \(draft.durationMinutes)-minute timer is ready. The user confirms it below your reply; it isn't running yet."
+            return "A \(draft.durationMinutes)-minute timer is ready. The user confirms it on the card shown with your reply; it isn't running yet."
         case .alarm:
             guard let parsed = PersonalDataTools.parseDate(arguments.time), parsed.hasTime else {
                 return "The time \(arguments.time) is not in the YYYY-MM-DDTHH:MM format."
@@ -43,7 +43,7 @@ struct DraftAlarmTool: Tool {
             if date < Date() { date = Calendar.current.date(byAdding: .day, value: 1, to: date) ?? date }
             let draft = ActionDraft(kind: .alarm, title: label.isEmpty ? "Alarm" : label, date: date)
             sink.send(.drafted(draft))
-            return "An alarm for \(PersonalDataTools.describe(date, withTime: true)) is ready. The user confirms it below your reply; it isn't set yet."
+            return "An alarm for \(PersonalDataTools.describe(date, withTime: true)) is ready. The user confirms it on the card shown with your reply; it isn't set yet."
         }
     }
 }

@@ -42,7 +42,22 @@ struct ToolHelperTests {
 
         #expect(PersonalDataTools.parseDate("2026-11-19T10:30:00Z")?.hasTime == true)
         #expect(PersonalDataTools.parseDate("2026-11-19")?.hasTime == false)
-        #expect(PersonalDataTools.parseDate("tomorrow") == nil)
+        #expect(PersonalDataTools.parseDate("someday") == nil)
+    }
+
+    @Test func parsesWeekdays() throws {
+        let calendar = Calendar.current
+        // Thursday.
+        let now = try #require(calendar.date(from: DateComponents(year: 2026, month: 11, day: 19, hour: 11)))
+        func components(_ text: String) -> DateComponents? {
+            PersonalDataTools.parseDate(text, now: now).map { calendar.dateComponents([.month, .day, .hour, .minute], from: $0.date) }
+        }
+        #expect(components("Monday 10:00") == DateComponents(month: 11, day: 23, hour: 10, minute: 0))
+        #expect(components("friday") == DateComponents(month: 11, day: 20, hour: 0, minute: 0))
+        #expect(components("next Thursday at 9:30") == DateComponents(month: 11, day: 26, hour: 9, minute: 30))
+        #expect(components("tomorrow 07:00") == DateComponents(month: 11, day: 20, hour: 7, minute: 0))
+        #expect(PersonalDataTools.parseDate("Monday", now: now)?.hasTime == false)
+        #expect(components("Friday 2026-11-20 06:30") == DateComponents(month: 11, day: 20, hour: 6, minute: 30))
     }
 
     @Test func instructionsCoverOnlyTheTurnsTools() {
@@ -143,6 +158,29 @@ struct TranslatedMarkdownTests {
         #expect(OnDeviceTranslator.MarkdownLines.split("2. Second") == ("2. ", "Second"))
         #expect(OnDeviceTranslator.MarkdownLines.split("> - [x] Done") == ("> - [x] ", "Done"))
         #expect(OnDeviceTranslator.MarkdownLines.split("Plain sentence.") == ("", "Plain sentence."))
+    }
+
+    @Test func paragraphsTranslateTogether() {
+        let reply = "The alarm is ready.\nConfirm it on the card.\n\n- **Standup** 10:00\n```\nlet x = 1\n```"
+        #expect(OnDeviceTranslator.MarkdownBlock.blocks(of: reply) == [
+            .paragraph("The alarm is ready.\nConfirm it on the card."),
+            .verbatim(""),
+            .item(marker: "- ", text: "**Standup** 10:00"),
+            .verbatim("```"),
+            .verbatim("let x = 1"),
+            .verbatim("```"),
+        ])
+    }
+
+    @Test func streamedReplyIsCutAfterFinishedParagraphs() {
+        func done(_ text: String) -> String? {
+            OnDeviceTranslator.MarkdownBlock.completedEnd(of: text).map { String(text[..<$0]) }
+        }
+        #expect(done("The alarm is ready.\nConfirm") == nil)
+        #expect(done("First.\n\nSecond.\n\nThird") == "First.\n\nSecond.\n\n")
+        // A blank line inside code isn't the end of anything.
+        #expect(done("Run:\n\n```\nlet x = 1\n\nlet y = 2") == "Run:\n\n")
+        #expect(done("```\nlet x = 1\n```\n\nNext") == "```\nlet x = 1\n```\n\n")
     }
 }
 

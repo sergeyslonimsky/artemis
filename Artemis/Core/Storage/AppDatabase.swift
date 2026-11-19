@@ -289,7 +289,69 @@ final class AppDatabase: Sendable {
             """)
         }
 
+        // Migration 17: dates that `AppRecord` wrote as text instead of Unix milliseconds
+        migrator.registerMigration("v17_dates_as_milliseconds") { db in
+            let columns = [
+                "chats": ["created_at", "updated_at"],
+                "providers": ["created_at", "updated_at"],
+                "presets": ["created_at", "updated_at"],
+                "attachments": ["created_at"],
+            ]
+            for (table, names) in columns {
+                for column in names {
+                    let rows = try Row.fetchAll(db, sql: "SELECT rowid, \(column) AS value FROM \(table) WHERE typeof(\(column)) = 'text'")
+                    for row in rows {
+                        let milliseconds = Self.legacyTextDateMilliseconds(row["value"]) ?? Date().databaseMilliseconds
+                        try db.execute(
+                            sql: "UPDATE \(table) SET \(column) = ? WHERE rowid = ?",
+                            arguments: [milliseconds, row["rowid"] as Int64]
+                        )
+                    }
+                }
+            }
+        }
+
+        // Migration 18: provider names are unique; earlier duplicates get a number
+        migrator.registerMigration("v18_unique_provider_names") { db in
+            let rows = try Row.fetchAll(db, sql: "SELECT id, name FROM providers ORDER BY created_at, rowid")
+            var taken = Set<String>()
+            for row in rows {
+                let name: String = row["name"]
+                var unique = name
+                var number = 2
+                while taken.contains(Provider.nameKey(unique)) {
+                    unique = "\(name) \(number)"
+                    number += 1
+                }
+                taken.insert(Provider.nameKey(unique))
+                if unique != name {
+                    try db.execute(sql: "UPDATE providers SET name = ? WHERE id = ?", arguments: [unique, row["id"] as String])
+                }
+            }
+            try db.execute(sql: "CREATE UNIQUE INDEX providers_by_name ON providers(name COLLATE NOCASE)")
+        }
+
         return migrator
+    }
+
+    /// Unix milliseconds of a "YYYY-MM-DD HH:MM:SS.SSS" UTC date. A year past 9999 comes from
+    /// milliseconds read back as seconds and saved again, so its seconds are the original milliseconds.
+    static func legacyTextDateMilliseconds(_ text: String) -> Int64? {
+        let fields = text.split(whereSeparator: { "- :.T".contains($0) }).map(String.init)
+        let numbers = fields.compactMap { Int($0) }
+        guard fields.count >= 6, numbers.count == fields.count else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .gmt
+        let components = DateComponents(
+            year: numbers[0], month: numbers[1], day: numbers[2],
+            hour: numbers[3], minute: numbers[4], second: numbers[5]
+        )
+        guard let date = calendar.date(from: components) else { return nil }
+        if numbers[0] > 9999 {
+            return Int64(date.timeIntervalSince1970)
+        }
+        let fraction = fields.count > 6 ? Double("0." + fields[6]) ?? 0 : 0
+        return Int64(((date.timeIntervalSince1970 + fraction) * 1000).rounded())
     }
 
     /// API keys used to live in `providers.api_key`; move them to the Keychain and blank the column.

@@ -26,23 +26,22 @@ final class SettingsModel {
     // MARK: - Observation
 
     func observeSettings() async {
-        await observe(database.observeSettings()) { settings = $0 }
+        await observe(database.observeSettings(), "settings") { settings = $0 }
     }
 
     func observeProviders() async {
-        await observe(database.observeProviders()) { providers = $0 }
+        await observe(database.observeProviders(), "providers") { providers = $0 }
     }
 
     func observePresets() async {
-        await observe(database.observePresets()) { presets = $0 }
+        await observe(database.observePresets(), "presets") { presets = $0 }
     }
 
-    private func observe<Value>(_ values: AsyncValueObservation<Value>, _ apply: (Value) -> Void) async {
-        do {
-            for try await value in values { apply(value) }
-        } catch {
-            Self.logger.error("Settings observation failed: \(error.localizedDescription, privacy: .public)")
-        }
+    private func observe<Value>(_ values: AsyncValueObservation<Value>, _ name: String, _ apply: (Value) -> Void) async {
+        await values.keepDelivering(onError: { error in
+            Self.logger.error("Observing \(name, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            errorMessage = "Couldn't load \(name): \(error.localizedDescription)"
+        }, apply)
     }
 
     // MARK: - Settings
@@ -98,14 +97,16 @@ final class SettingsModel {
             var provider = provider
             provider.updatedAt = Date()
             try database.saveProvider(provider, apiKey: apiKey)
+            if isFirst { update { $0.defaultProviderId = provider.id } }
         }
-        if isFirst { update { $0.defaultProviderId = provider.id } }
     }
 
     func deleteProvider(_ provider: Provider) {
-        perform { try database.deleteProvider(id: provider.id) }
-        if settings.defaultProviderId == provider.id {
-            update { $0.defaultProviderId = providers.first { $0.id != provider.id }?.id }
+        perform {
+            try database.deleteProvider(id: provider.id)
+            if settings.defaultProviderId == provider.id {
+                update { $0.defaultProviderId = providers.first { $0.id != provider.id }?.id }
+            }
         }
     }
 

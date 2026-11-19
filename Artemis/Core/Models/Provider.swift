@@ -61,6 +61,16 @@ enum ProviderKind: String, Codable, Sendable, CaseIterable {
     static let freeModelSuffix = ":free"
 }
 
+enum ProviderError: LocalizedError, Equatable {
+    case nameTaken(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .nameTaken(let name): "A provider named “\(name)” already exists."
+        }
+    }
+}
+
 /// What a provider's `/chat/completions` endpoint accepts.
 struct ProviderCapabilities: Equatable, Sendable {
     /// `image_url` content parts.
@@ -108,6 +118,11 @@ struct Provider: Identifiable, Codable, Equatable, Sendable {
 
     func supportsWebSearch(model: String) -> Bool {
         modelCapabilities[model]?.contains(Self.toolsCapability) == true
+    }
+
+    /// Names are unique regardless of case and surrounding spaces.
+    static func nameKey(_ name: String) -> String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
     init(

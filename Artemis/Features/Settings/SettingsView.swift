@@ -75,7 +75,7 @@ struct SettingsView: View {
                 }
             }
             .onAppear { onDeviceStatus = .current }
-            .errorAlert("Couldn't save", message: $model.errorMessage)
+            .errorAlert("Something went wrong", message: $model.errorMessage)
         }
         .task { await model.observeSettings() }
         .task { await model.observeProviders() }
