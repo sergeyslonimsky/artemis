@@ -30,7 +30,9 @@ final class ChatSessionModel {
     private(set) var selectedPreset: Preset?
 
     var inputText = ""
-    var attachments: [Attachment] = []
+    var attachments: [Attachment] = [] {
+        didSet { attachmentsChanged(from: oldValue) }
+    }
     var isShowingModelPicker = false
     var voiceSession: VoiceSession?
     /// A system composer or editor finishing a drafted action.
@@ -42,16 +44,36 @@ final class ChatSessionModel {
     /// The user picked a model in this chat; until then a draft follows the defaults.
     private var userPickedModel = false
     private var chatLoaded = false
+    private var providersLoaded = false
     private var settingsLoaded = false
     private var presetsLoaded = false
     private var defaultPresetApplied = false
+    /// Images whose text the composer is waiting for, so a change to the list doesn't wait twice.
+    @ObservationIgnored private var awaitedTextIds: Set<String> = []
+    /// Set while sent attachments leave the composer: their text is still being read for the reply.
+    @ObservationIgnored private var isHandingOffAttachments = false
+    /// What the chat was opened with; applied once everything the turn depends on has loaded.
+    private var pendingLaunch: ChatLaunch?
+    /// The chat was opened to type in (a control, the New Chat shortcut).
+    let launchFocusesComposer: Bool
 
+    /// Tells the screen the launch ran, so a recreated session doesn't run it again.
+    @ObservationIgnored private let onLaunchApplied: () -> Void
     @ObservationIgnored private let database: AppDatabase
     @ObservationIgnored private let chatService: ChatService
     private static let logger = Logger(subsystem: "com.artemis.ios", category: "ChatSession")
 
-    init(chatId: String, database: AppDatabase = .shared, chatService: ChatService = .shared) {
+    init(
+        chatId: String,
+        launch: ChatLaunch? = nil,
+        onLaunchApplied: @escaping () -> Void = {},
+        database: AppDatabase = .shared,
+        chatService: ChatService = .shared
+    ) {
         self.chatId = chatId
+        self.pendingLaunch = launch
+        self.launchFocusesComposer = launch?.focusComposer ?? false
+        self.onLaunchApplied = onLaunchApplied
         self.database = database
         self.chatService = chatService
     }
@@ -65,6 +87,7 @@ final class ChatSessionModel {
             self.chat = chat
             chatLoaded = true
             resolveSelection()
+            applyLaunchIfReady()
         }
     }
 
@@ -75,7 +98,9 @@ final class ChatSessionModel {
     func observeProviders() async {
         await observe(database.observeProviders(), "providers") { providers in
             self.providers = providers
+            providersLoaded = true
             resolveSelection()
+            applyLaunchIfReady()
         }
     }
 
@@ -85,6 +110,7 @@ final class ChatSessionModel {
             settingsLoaded = true
             resolveSelection()
             resolvePreset()
+            applyLaunchIfReady()
         }
     }
 
@@ -93,6 +119,7 @@ final class ChatSessionModel {
             self.presets = presets
             presetsLoaded = true
             resolvePreset()
+            applyLaunchIfReady()
         }
     }
 
@@ -110,6 +137,56 @@ final class ChatSessionModel {
     func refreshPickerData() {
         onDeviceStatus = .current
         recentModels = (try? database.recentModels()) ?? []
+    }
+
+    // MARK: - Launch
+
+    /// Fills the composer with what the chat was opened with, then sends it or starts voice mode.
+    /// Waits for the model selection and the preset, which decide where the turn goes.
+    private func applyLaunchIfReady() {
+        guard let launch = pendingLaunch, chatLoaded, providersLoaded, settingsLoaded, presetsLoaded else { return }
+        pendingLaunch = nil
+        onLaunchApplied()
+        inputText = launch.prompt
+        attachments = launch.attachments
+        if launch.voice {
+            startVoice()
+        } else if launch.autoSend {
+            send()
+        }
+    }
+
+    // MARK: - Attachments
+
+    /// Removed images stop being read. New ones were already being read since they were attached
+    /// (picked, scanned or shared): the composer takes the text so it's stored with the message,
+    /// and an on-device reply doesn't wait for it.
+    private func attachmentsChanged(from old: [Attachment]) {
+        if !isHandingOffAttachments {
+            let kept = Set(attachments.map(\.id))
+            for attachment in old where !kept.contains(attachment.id) {
+                ImageTextReader.shared.cancel(id: attachment.id)
+            }
+        }
+        for attachment in attachments where attachment.kind == .image && attachment.recognizedText == nil {
+            guard let data = attachment.data, !awaitedTextIds.contains(attachment.id) else { continue }
+            awaitedTextIds.insert(attachment.id)
+            Task {
+                defer { awaitedTextIds.remove(attachment.id) }
+                let text: String
+                do {
+                    text = try await ImageTextReader.shared.text(id: attachment.id, data: data) ?? ""
+                } catch {
+                    return
+                }
+                if let index = attachments.firstIndex(where: { $0.id == attachment.id }) {
+                    attachments[index].recognizedText = text
+                } else {
+                    // Sent before the reading finished (a cloud reply doesn't wait for it).
+                    try? database.setRecognizedText(text, attachmentId: attachment.id)
+                }
+            }
+        }
     }
 
     // MARK: - Selection
@@ -264,7 +341,9 @@ final class ChatSessionModel {
             try ensureChat()
             try chatService.send(chatId: chatId, content: prompt, attachments: attachments, options: turnOptions)
             inputText = ""
+            isHandingOffAttachments = true
             attachments = []
+            isHandingOffAttachments = false
         }
     }
 

@@ -27,6 +27,10 @@ enum RouteReason: String, Codable, Sendable {
     case alarm
     case weather
     case places
+    /// Travel times: location and directions. getTravelTime finds the next event itself.
+    case travel
+    /// An alarm to leave in time: travel, plus the alarm tools.
+    case travelAlarm = "travel_alarm"
     case health
     case freshInformation = "fresh_information"
     case complexReasoning = "complex_reasoning"
@@ -47,13 +51,20 @@ enum RouteReason: String, Codable, Sendable {
              .onDeviceFailed, .onDeviceDeclined:
             true
         case .userSelectedOnDevice, .noCloudProvider, .smallTalk, .cloudCantReadAttachment, .personalData, .simple, .writing, .deviceAction,
-             .contacts, .alarm, .weather, .places, .health:
+             .contacts, .alarm, .weather, .places, .travel, .travelAlarm, .health:
             false
         }
     }
 
     /// On-device tools the reply may use.
     var toolGroups: Set<ToolGroup> {
+        // Only the tools a trip needs: offered alarms, the model drafted alarms nobody asked for;
+        // offered the calendar, it took arrival times from unrelated events.
+        switch self {
+        case .travel: return [.places]
+        case .travelAlarm: return [.places, .alarms]
+        default: break
+        }
         if let group = ToolGroup.allCases.first(where: { $0.routeReason == self }) {
             return [group]
         }
@@ -66,7 +77,7 @@ enum RouteReason: String, Codable, Sendable {
     /// The request is about the user's own data: the reply stays on the device and isn't escalated.
     var keepsDataOnDevice: Bool {
         switch self {
-        case .personalData, .contacts, .alarm, .places, .health: true
+        case .personalData, .contacts, .alarm, .places, .travel, .travelAlarm, .health: true
         default: false
         }
     }
@@ -92,6 +103,7 @@ enum RouteReason: String, Codable, Sendable {
         case .alarm: "alarms and timers are set on this device"
         case .weather: "the on-device model can check the weather"
         case .places: "it uses your location, which stays on this device"
+        case .travel, .travelAlarm: "it uses your location and calendar, which stay on this device"
         case .health: "it uses your health data, which stays on this device"
         case .freshInformation: "it needs up-to-date information"
         case .complexReasoning: "it needs complex reasoning"

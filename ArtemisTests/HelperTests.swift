@@ -119,3 +119,65 @@ struct ProviderTests {
         }
     }
 }
+
+@Suite("Shared inbox")
+struct SharedInboxTests {
+    @Test func itemURLRoundTrips() {
+        let url = SharedInbox.url(for: "abc-123")
+        #expect(url.absoluteString == "artemis://shared/abc-123")
+        #expect(SharedInbox.itemId(in: url) == "abc-123")
+    }
+
+    @Test func ignoresOtherURLs() throws {
+        #expect(SharedInbox.itemId(in: try #require(URL(string: "artemis://shared/"))) == nil)
+        #expect(SharedInbox.itemId(in: try #require(URL(string: "artemis://other/abc"))) == nil)
+        #expect(SharedInbox.itemId(in: try #require(URL(string: "https://shared/abc"))) == nil)
+    }
+}
+
+@Suite("Translated Markdown")
+struct TranslatedMarkdownTests {
+    @Test func keepsMarkersOutOfTheTranslation() {
+        #expect(OnDeviceTranslator.MarkdownLines.split("## Plan") == ("## ", "Plan"))
+        #expect(OnDeviceTranslator.MarkdownLines.split("  - **Bold** text") == ("  - ", "**Bold** text"))
+        #expect(OnDeviceTranslator.MarkdownLines.split("2. Second") == ("2. ", "Second"))
+        #expect(OnDeviceTranslator.MarkdownLines.split("> - [x] Done") == ("> - [x] ", "Done"))
+        #expect(OnDeviceTranslator.MarkdownLines.split("Plain sentence.") == ("", "Plain sentence."))
+    }
+}
+
+@Suite("Saved places")
+struct SavedPlacesTests {
+    let places = [SavedPlace(name: "Gym", address: "1 Main St"), SavedPlace(name: "Café", address: "2 Side St")]
+
+    @Test func findsByNameIgnoringCaseAccentsAndMy() {
+        #expect(SavedPlaces.place(named: "gym", in: places)?.address == "1 Main St")
+        #expect(SavedPlaces.place(named: "My Gym", in: places)?.address == "1 Main St")
+        #expect(SavedPlaces.place(named: "cafe", in: places)?.address == "2 Side St")
+        #expect(SavedPlaces.place(named: "Central Station", in: places) == nil)
+    }
+
+    @Test func namedPlaceWinsOverNextEvent() {
+        #expect(TravelTimeTool.destination(.nextEvent, place: "Gym") == .place)
+        #expect(TravelTimeTool.destination(.nextEvent, place: "") == .nextEvent)
+        #expect(TravelTimeTool.destination(.nextEvent, place: "my next meeting") == .nextEvent)
+        #expect(TravelTimeTool.destination(.place, place: "Work") == .place)
+    }
+
+    @Test func arrivalOnAWrongDayMovesToToday() throws {
+        let calendar = Calendar.current
+        let now = try #require(calendar.date(from: DateComponents(year: 2026, month: 11, day: 19, hour: 10, minute: 30)))
+        let yesterdayEvening = try #require(calendar.date(from: DateComponents(year: 2026, month: 11, day: 18, hour: 18)))
+        let todayEvening = try #require(calendar.date(from: DateComponents(year: 2026, month: 11, day: 19, hour: 18)))
+        #expect(TravelTimeTool.correctingDay(of: yesterdayEvening, now: now) == todayEvening)
+        // Already passed today: too late, not tomorrow.
+        let thisMorning = try #require(calendar.date(from: DateComponents(year: 2026, month: 11, day: 19, hour: 9)))
+        #expect(TravelTimeTool.correctingDay(of: thisMorning, now: now) == thisMorning)
+        #expect(TravelTimeTool.correctingDay(of: todayEvening, now: now) == todayEvening)
+    }
+
+    @Test func instructionsNameThePlaces() {
+        #expect(PersonalDataTools.savedPlacesInstructions(places).contains("\"Gym\", \"Café\""))
+        #expect(PersonalDataTools.savedPlacesInstructions([]).contains("no saved places"))
+    }
+}

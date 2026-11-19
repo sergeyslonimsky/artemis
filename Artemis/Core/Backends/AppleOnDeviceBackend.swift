@@ -1,6 +1,7 @@
 import Foundation
 import FoundationModels
 import ImageIO
+import Synchronization
 import UniformTypeIdentifiers
 import os
 
@@ -103,6 +104,14 @@ struct AppleOnDeviceBackend: ChatBackend {
         return tools.isEmpty ? base : base + "\n\n" + PersonalDataTools.instructions(for: tools)
     }
 
+    /// Without this the model took "rescan the receipt" for an action it can't take, though the
+    /// receipt's text was right there in the conversation.
+    static let imageTextInstructions = """
+        Images in this conversation come with the text recognized in them (OCR). When the user asks you \
+        to look at, re-read or rescan an image, even one from earlier, answer from that text: it is the \
+        image's content, so don't say you can't access or scan it.
+        """
+
     private static let logger = Logger(subsystem: "com.artemis.ios", category: "AppleOnDeviceBackend")
 
     init() {}
@@ -132,10 +141,18 @@ struct AppleOnDeviceBackend: ChatBackend {
             throw OnDeviceError.failed("There is no message to answer.")
         }
 
-        let request = try await PromptParts(message: last, model: model, includesTime: !turn.toolGroups.isEmpty)
+        // A language the model doesn't support is translated on the device both ways, if installed.
+        let translation = turn.usesAssistantPersona ? await TranslatedTurn(messages: turn.messages) : nil
+        var prompted = last
+        if let translation {
+            continuation.yield(.toolStarted(.translation))
+            prompted.content = try await translation.prompt(last.content)
+        }
+
+        let request = try await PromptParts(message: prompted, model: model, includesTime: !turn.toolGroups.isEmpty)
         let responseBudget = min(maxResponseTokens, model.contextSize / 4)
         let reservedTokens = responseBudget + request.images.count * estimatedTokensPerImage
-        let instructions = instructions(for: turn)
+        let instructions = instructions(for: turn, translation: translation?.instructions)
         let history = Array(turn.messages.dropLast())
 
         // Apple recommends one session per conversation: the model keeps its cache instead of
@@ -153,20 +170,33 @@ struct AppleOnDeviceBackend: ChatBackend {
             sink = cached.sink
         } else {
             sink = ToolEventSink()
-            let tools = PersonalDataTools.tools(for: turn.toolGroups, sink: sink)
+            var tools = PersonalDataTools.tools(for: turn.toolGroups, sink: sink)
+            if turn.offersTranslation {
+                tools.append(TranslateTool(sink: sink))
+            }
             let transcript = try await buildTranscript(
                 instructions: instructions,
                 history: history,
+                imageDetails: ImageTextNote.details(for: history, currentHasImages: last.attachments.contains { $0.kind == .image }),
+                translation: translation,
                 promptText: request.text,
                 reservedTokens: reservedTokens + (tools.isEmpty ? 0 : (try? await model.tokenCount(for: tools)) ?? 400),
                 model: model
             )
             session = LanguageModelSession(model: model, tools: tools, transcript: transcript)
         }
+        // Drafts of a translated turn wait for their titles to be translated after the reply.
+        let heldDrafts = Mutex<[ActionDraft]>([])
+        let holdsDrafts = translation != nil
         sink.setHandler { event in
             switch event {
             case .started(let source): continuation.yield(.toolStarted(source))
-            case .drafted(let draft): continuation.yield(.actionDraft(draft))
+            case .drafted(let draft):
+                if holdsDrafts {
+                    heldDrafts.withLock { $0.append(draft) }
+                } else {
+                    continuation.yield(.actionDraft(draft))
+                }
             }
         }
         defer { sink.setHandler(nil) }
@@ -181,9 +211,11 @@ struct AppleOnDeviceBackend: ChatBackend {
         var content = ""
         var reasoning = ""
         var outputTokens: Int?
+        var entries: ArraySlice<Transcript.Entry> = []
 
         for try await snapshot in session.streamResponse(to: request.prompt, options: options) {
             try Task.checkCancellation()
+            entries = snapshot.transcriptEntries
 
             let newReasoning = reasoningText(in: snapshot.transcriptEntries)
             if let delta = appendedText(from: reasoning, to: newReasoning) {
@@ -192,10 +224,27 @@ struct AppleOnDeviceBackend: ChatBackend {
             reasoning = newReasoning
 
             if let delta = appendedText(from: content, to: snapshot.content) {
-                continuation.yield(.content(delta))
+                let output = try await translation?.reply(delta) ?? delta
+                if !output.isEmpty {
+                    continuation.yield(.content(output))
+                }
             }
             content = snapshot.content
             outputTokens = snapshot.usage.output.totalTokenCount
+        }
+
+        if let translation {
+            let rest = try await translation.finishReply()
+            if !rest.isEmpty {
+                continuation.yield(.content(rest))
+            }
+            for draft in heldDrafts.withLock({ $0 }) {
+                continuation.yield(.actionDraft(await translation.draft(draft)))
+            }
+        }
+
+        for call in toolCalls(in: entries) {
+            continuation.yield(.toolCall(call))
         }
 
         if let conversationId = turn.conversationId, let replyId = turn.replyId, !Task.isCancelled {
@@ -217,17 +266,29 @@ struct AppleOnDeviceBackend: ChatBackend {
         ))
     }
 
-    private static func instructions(for turn: ChatTurn) -> String {
+    /// - Parameter translation: instructions of a translated turn.
+    private static func instructions(for turn: ChatTurn, translation: String? = nil) -> String {
         let custom = Preset.effectiveSystemPrompt(preset: turn.preset, fallback: turn.systemPrompt)
         guard turn.usesAssistantPersona else { return custom ?? "" }
-        let base = baseInstructions(tools: turn.toolGroups)
-        return custom.map { base + "\n\n" + $0 } ?? base
+        let hasImages = turn.messages.contains { $0.attachments.contains { $0.kind == .image } }
+        let parts = [
+            baseInstructions(tools: turn.toolGroups),
+            hasImages ? imageTextInstructions : nil,
+            turn.offersTranslation ? TranslateTool.instructions : nil,
+            translation,
+            custom,
+        ]
+        return parts.compactMap(\.self).joined(separator: "\n\n")
     }
 
     /// Instructions + as much recent history as fits next to the prompt and the reserved tokens.
+    /// A translated turn translates only the messages that fit. Text read in earlier images
+    /// shrinks (full → excerpt → label) before a message is dropped.
     private static func buildTranscript(
         instructions: String,
         history: [Message],
+        imageDetails: [ImageTextNote.Detail],
+        translation: TranslatedTurn?,
         promptText: String,
         reservedTokens: Int,
         model: SystemLanguageModel
@@ -243,19 +304,23 @@ struct AppleOnDeviceBackend: ChatBackend {
         guard used <= model.contextSize else { throw OnDeviceError.contextTooLong }
 
         // Walk back from the newest message and stop at the first one that doesn't fit.
-        var kept: [Transcript.Entry] = []
-        for message in history.reversed() {
-            guard let entry = historyEntry(for: message) else { continue }
-            let cost = await tokenCount([entry], model: model)
-            guard used + cost <= model.contextSize else { break }
-            used += cost
-            kept.append(entry)
-        }
+        let kept = await fitNewestFirst(
+            Array(zip(history, imageDetails)),
+            room: model.contextSize - used,
+            variants: { message, maxDetail in
+                var message = message
+                if let translation {
+                    message.content = await translation.history(message.content)
+                }
+                return historyTexts(for: message, maxDetail: maxDetail).compactMap { historyEntry(text: $0, role: message.role) }
+            },
+            cost: { await tokenCount([$0], model: model) }
+        )
 
         if kept.count < history.count {
             logger.debug("Trimmed \(history.count - kept.count) old messages to fit the on-device context")
         }
-        return Transcript(entries: [instructionsEntry] + kept.reversed())
+        return Transcript(entries: [instructionsEntry] + kept)
     }
 
     /// Whether a reused session still has room for the next prompt and the reply.
@@ -275,16 +340,61 @@ struct AppleOnDeviceBackend: ChatBackend {
         return characters / 3 + 8
     }
 
-    /// Past turns as text. Earlier attachments are only mentioned to save context.
-    private static func historyEntry(for message: Message) -> Transcript.Entry? {
+    /// Picks, newest item first, the first of its variants (most detailed first) that still fits
+    /// in `room`, and stops at the first item none of whose variants fits. Oldest first.
+    static func fitNewestFirst<Item, Variant>(
+        _ items: [Item],
+        room: Int,
+        variants: (Item) async -> [Variant],
+        cost: (Variant) async -> Int
+    ) async -> [Variant] {
+        var room = room
+        var kept: [Variant] = []
+        next: for item in items.reversed() {
+            let variants = await variants(item)
+            guard !variants.isEmpty else { continue }
+            for variant in variants {
+                let size = await cost(variant)
+                if size <= room {
+                    room -= size
+                    kept.append(variant)
+                    continue next
+                }
+            }
+            break
+        }
+        return kept.reversed()
+    }
+
+    /// A past turn as text, most detailed first: text read in its images shrinks
+    /// (full → excerpt → label) before the turn is dropped. Empty for an empty message.
+    static func historyTexts(for message: Message, maxDetail: ImageTextNote.Detail) -> [String] {
+        var texts: [String] = []
+        for detail in [ImageTextNote.Detail.full, .excerpt, .label] where detail <= maxDetail {
+            let text = historyText(for: message, imageDetail: detail)
+            if !text.isEmpty, texts.last != text {
+                texts.append(text)
+            }
+        }
+        return texts
+    }
+
+    /// Images come back as the text OCR read in them; other attachments are only mentioned to save context.
+    private static func historyText(for message: Message, imageDetail: ImageTextNote.Detail) -> String {
         var text = message.content
         for attachment in message.attachments {
-            text += "\n[Attached \(attachment.kindLabel.lowercased()): \(attachment.filename)]"
+            if attachment.kind == .image {
+                text += "\n" + ImageTextNote.note(for: attachment, detail: imageDetail)
+            } else {
+                text += "\n[Attached \(attachment.kindLabel.lowercased()): \(attachment.filename)]"
+            }
         }
-        guard !text.isEmpty else { return nil }
-        let segments: [Transcript.Segment] = [.text(.init(content: text))]
+        return text
+    }
 
-        switch message.role {
+    private static func historyEntry(text: String, role: MessageRole) -> Transcript.Entry? {
+        let segments: [Transcript.Segment] = [.text(.init(content: text))]
+        switch role {
         case .user:
             return .prompt(Transcript.Prompt(segments: segments))
         case .assistant:
@@ -299,6 +409,24 @@ struct AppleOnDeviceBackend: ChatBackend {
             guard case .reasoning(let reasoning) = entry else { return nil }
             return reasoning.segments.text
         }.joined(separator: "\n")
+    }
+
+    /// The turn's tool calls with what each returned.
+    static func toolCalls(in entries: ArraySlice<Transcript.Entry>) -> [ToolCallRecord] {
+        var outputs: [String: String] = [:]
+        for case .toolOutput(let output) in entries {
+            outputs[output.id] = output.segments.text
+        }
+        return entries.flatMap { entry -> [ToolCallRecord] in
+            guard case .toolCalls(let calls) = entry else { return [] }
+            return calls.map { call in
+                ToolCallRecord(
+                    name: call.toolName,
+                    arguments: call.arguments.jsonString,
+                    output: String((outputs[call.id] ?? "").prefix(ToolCallRecord.maxOutputLength))
+                )
+            }
+        }
     }
 
     /// The suffix added since the previous snapshot; `nil` if nothing new.
@@ -365,20 +493,17 @@ private struct PromptParts {
         for attachment in message.attachments {
             guard let data = attachment.data else { continue }
             if attachment.kind == .image {
-                guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-                      let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+                guard let image = AttachmentProcessor.uprightImage(from: data) else {
                     throw OnDeviceError.unsupportedAttachment(attachment.filename)
                 }
                 images.append(image)
-                if let recognized = await ImageTextRecognizer.recognizeText(in: image) {
-                    text += """
-
-
-                        Text recognized in the attached image \(attachment.filename) (OCR, may contain errors):
-                        \"\"\"
-                        \(recognized)
-                        \"\"\"
-                        """
+                // `ReplyJob` normally recognized it already; a turn built elsewhere reads it here.
+                var attachment = attachment
+                if attachment.recognizedText == nil {
+                    attachment.recognizedText = try? await ImageTextRecognizer.recognizeText(in: image)
+                }
+                if let recognized = ImageTextNote.promptText(for: attachment) {
+                    text += "\n\n" + recognized
                 }
             } else if let body = attachment.text {
                 text += "\n\nFile: \(attachment.filename)\n```\n\(body)\n```"

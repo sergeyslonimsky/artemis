@@ -66,6 +66,25 @@ actor LocationProvider {
         let name = item.addressRepresentations?.cityWithContext ?? item.name ?? place
         return (item.location, name)
     }
+
+    /// A destination for directions. Names ("IKEA", "Central Station") and addresses are searched
+    /// near the user first, so the nearest match wins; anything else is geocoded (another city).
+    @MainActor
+    static func mapItem(for place: String, near location: CLLocation) async throws -> MKMapItem {
+        let search = MKLocalSearch.Request()
+        search.naturalLanguageQuery = place
+        search.resultTypes = [.address, .pointOfInterest]
+        search.region = MKCoordinateRegion(center: location.coordinate, latitudinalMeters: 50_000, longitudinalMeters: 50_000)
+        search.regionPriority = .required
+        if let item = try? await MKLocalSearch(request: search).start().mapItems.first {
+            return item
+        }
+        guard let request = MKGeocodingRequest(addressString: place),
+              let item = try await request.mapItems.first else {
+            throw LocationError.placeNotFound(place)
+        }
+        return item
+    }
 }
 
 // MARK: - Weather
@@ -316,5 +335,210 @@ struct SearchPlacesTool: Tool {
             if let phone = item.phoneNumber { line += ", tel. \(phone)" }
             return line
         }.joined(separator: "\n")
+    }
+}
+
+// MARK: - Travel
+
+struct TravelTimeTool: Tool {
+    let sink: ToolEventSink
+
+    let name = "getTravelTime"
+    let description = "Gets how long it takes to get somewhere, from the user's location or another start, and when to leave to arrive on time. "
+        + "For the next event, plans the trip to the user's next calendar event that has a location."
+
+    @Generable
+    enum Transport {
+        case driving
+        case walking
+        case transit
+        case cycling
+    }
+
+    @Generable
+    enum Destination {
+        case place
+        case nextEvent
+    }
+
+    @Generable
+    struct Arguments {
+        @Guide(description: "Where the trip starts, only if the user says: the name of one of the user's saved places or an address; empty for the user's current location")
+        var from: String
+        @Guide(description: "Where to go: a place (a saved place, an address or a place name), or nextEvent only when the user asks about their next event or meeting")
+        var destination: Destination
+        @Guide(description: "For a place: the name of one of the user's saved places, an address or a place name; empty otherwise")
+        var place: String
+        var transport: Transport
+        @Guide(description: "Only if the user says when they have to arrive: that time as YYYY-MM-DDTHH:MM in local time; empty otherwise, to leave now or for the next event's start")
+        var arriveBy: String
+    }
+
+    /// Margin suggested before leaving: finding keys, parking, the walk to the platform.
+    private static let bufferMinutes = 5
+
+    func call(arguments: Arguments) async throws -> String {
+        let places = SavedPlaces.load()
+        var start = arguments.from.trimmingCharacters(in: .whitespacesAndNewlines)
+        var destination = arguments.place.trimmingCharacters(in: .whitespacesAndNewlines)
+        var arrival = PersonalDataTools.parseDate(arguments.arriveBy)
+            .flatMap { $0.hasTime ? Self.correctingDay(of: $0.date) : nil }
+        var lines: [String] = []
+
+        switch Self.destination(arguments.destination, place: destination) {
+        case .nextEvent:
+            sink.send(.started(.calendar))
+            let event: PersonalDataStore.EventSummary
+            do {
+                guard let next = try await Self.nextEventWithLocation() else {
+                    return "The user has no event with a location in the next two days. Ask where they want to go."
+                }
+                event = next
+            } catch {
+                return error.localizedDescription
+            }
+            destination = event.location ?? ""
+            arrival = arrival ?? event.start
+            lines.append("Next event: \"\(event.title)\" on \(PersonalDataTools.describe(event.start, withTime: true)) at \(destination).")
+        case .place:
+            guard !destination.isEmpty else { return "Ask the user where they want to go." }
+            if let saved = SavedPlaces.place(named: destination, in: places) {
+                lines.append("\(saved.name) is the user's saved place at \(saved.address).")
+                destination = saved.address
+            }
+        }
+
+        // "Home" is a saved place too, but the user's current location is the default start.
+        var startName = "the user's location"
+        if !start.isEmpty {
+            startName = start
+            if let saved = SavedPlaces.place(named: start, in: places) {
+                lines.append("\(saved.name) is the user's saved place at \(saved.address).")
+                start = saved.address
+            }
+        }
+
+        let eta: Trip
+        do {
+            let origin: CLLocation
+            if start.isEmpty {
+                sink.send(.started(.location))
+                origin = try await LocationProvider.shared.current()
+            } else {
+                origin = try await LocationProvider.resolve(start).location
+            }
+            eta = try await Self.trip(from: origin, to: destination, by: arguments.transport, arrival: arrival)
+        } catch let error as LocationProvider.LocationError {
+            return error.localizedDescription
+        } catch {
+            return "Couldn't get \(Self.mode(arguments.transport)) directions to \(destination): \(error.localizedDescription)"
+        }
+
+        let place = eta.placeName.isEmpty ? destination : eta.placeName
+        let duration = Duration.seconds(eta.expectedTravelTime)
+            .formatted(.units(allowed: [.hours, .minutes], width: .wide, fractionalPart: .hide(rounded: .up)))
+        let distance = Measurement(value: eta.distance, unit: UnitLength.meters)
+            .formatted(.measurement(width: .abbreviated, usage: .road))
+        lines.append("\(Self.mode(arguments.transport).capitalized) from \(startName) to \(place): "
+            + "about \(duration), \(distance).")
+
+        if let arrival {
+            let departure = eta.expectedDepartureDate
+            if departure > Date() {
+                let leaveBy = departure.addingTimeInterval(-Double(Self.bufferMinutes * 60))
+                lines.append("To arrive by \(arrival.formatted(date: .omitted, time: .shortened)), leave at "
+                    + "\(departure.formatted(date: .omitted, time: .shortened)); with a \(Self.bufferMinutes)-minute margin, "
+                    + "by \(PersonalDataTools.describe(leaveBy, withTime: true)).")
+            } else {
+                let arrivesAt = Date().addingTimeInterval(eta.expectedTravelTime)
+                lines.append("It's too late to arrive by \(arrival.formatted(date: .omitted, time: .shortened)): "
+                    + "leaving now arrives around \(arrivesAt.formatted(date: .omitted, time: .shortened)).")
+            }
+        } else {
+            lines.append("Leaving now arrives around \(eta.expectedArrivalDate.formatted(date: .omitted, time: .shortened)).")
+        }
+        lines.append("Tell the user how long the trip takes.")
+        return lines.joined(separator: "\n")
+    }
+
+    /// The model picks nextEvent with a named place ("Gym", "airport"): the place wins.
+    static func destination(_ destination: Destination, place: String) -> Destination {
+        guard destination == .nextEvent, !place.isEmpty else { return destination }
+        let words = ["event", "meeting", "appointment"]
+        return words.contains { place.localizedCaseInsensitiveContains($0) } ? .nextEvent : .place
+    }
+
+    /// The model sometimes gets the date wrong ("by 18:00" on yesterday's date): a passed
+    /// arrival whose time is still ahead today means today.
+    static func correctingDay(of arrival: Date, now: Date = Date()) -> Date {
+        let calendar = Calendar.current
+        guard arrival < now,
+              !calendar.isDate(arrival, inSameDayAs: now),
+              let today = calendar.date(
+                  bySettingHour: calendar.component(.hour, from: arrival),
+                  minute: calendar.component(.minute, from: arrival),
+                  second: 0,
+                  of: now
+              ),
+              today > now else { return arrival }
+        return today
+    }
+
+    /// What MapKit estimated, out of its main-actor types.
+    private struct Trip: Sendable {
+        var placeName: String
+        var expectedTravelTime: TimeInterval
+        var distance: CLLocationDistance
+        var expectedDepartureDate: Date
+        var expectedArrivalDate: Date
+    }
+
+    /// Leaves now, or arrives at `arrival` when it's still ahead (traffic is predicted for that time).
+    @MainActor
+    private static func trip(from origin: CLLocation, to destination: String, by transport: Transport, arrival: Date?) async throws -> Trip {
+        let target = try await LocationProvider.mapItem(for: destination, near: origin)
+        let request = MKDirections.Request()
+        request.source = MKMapItem(location: origin, address: nil)
+        request.destination = target
+        request.transportType = transportType(transport)
+        if let arrival, arrival > Date() {
+            request.arrivalDate = arrival
+        } else {
+            request.departureDate = Date()
+        }
+        let eta = try await MKDirections(request: request).calculateETA()
+        return Trip(
+            placeName: [target.name, target.address?.shortAddress.flatMap { $0 == target.name ? nil : $0 }]
+                .compactMap(\.self).joined(separator: ", "),
+            expectedTravelTime: eta.expectedTravelTime,
+            distance: eta.distance,
+            expectedDepartureDate: eta.expectedDepartureDate,
+            expectedArrivalDate: eta.expectedArrivalDate
+        )
+    }
+
+    /// The first timed event in the next two days with a location, not yet started.
+    private static func nextEventWithLocation() async throws -> PersonalDataStore.EventSummary? {
+        let now = Date()
+        return try await PersonalDataStore.shared.events(from: Calendar.current.startOfDay(for: now), days: 3)
+            .first { !$0.isAllDay && $0.start > now && $0.start < now.addingTimeInterval(48 * 3600) && $0.location != nil }
+    }
+
+    private static func transportType(_ transport: Transport) -> MKDirectionsTransportType {
+        switch transport {
+        case .driving: .automobile
+        case .walking: .walking
+        case .transit: .transit
+        case .cycling: .cycling
+        }
+    }
+
+    private static func mode(_ transport: Transport) -> String {
+        switch transport {
+        case .driving: "driving"
+        case .walking: "walking"
+        case .transit: "public transport"
+        case .cycling: "cycling"
+        }
     }
 }

@@ -18,6 +18,7 @@ struct ComposerView: View {
     @State private var isShowingFileImporter = false
     @State private var isShowingPhotoPicker = false
     @State private var isShowingCamera = false
+    @State private var isShowingScanner = false
     @State private var dictation = Dictation()
     @State private var dictationError: String?
     /// Bumped by the send, stop and voice buttons for their haptic.
@@ -59,6 +60,10 @@ struct ComposerView: View {
         )
         .fullScreenCover(isPresented: $isShowingCamera) {
             CameraPicker(onCapture: handleCameraPhoto)
+                .ignoresSafeArea()
+        }
+        .fullScreenCover(isPresented: $isShowingScanner) {
+            DocumentScanner(onScan: handleScannedPages)
                 .ignoresSafeArea()
         }
         .onChange(of: focus.wrappedValue) { _, focused in
@@ -129,6 +134,9 @@ struct ComposerView: View {
         Menu {
             if CameraPicker.isAvailable {
                 Button("Camera", systemImage: "camera") { isShowingCamera = true }
+            }
+            if DocumentScanner.isAvailable {
+                Button("Scan Document", systemImage: "doc.viewfinder") { isShowingScanner = true }
             }
             // A PhotosPicker nested in a Menu never presents; drive it from state instead.
             Button("Photos", systemImage: "photo.on.rectangle") { isShowingPhotoPicker = true }
@@ -265,6 +273,17 @@ struct ComposerView: View {
 
     private func handleCameraPhoto(_ image: UIImage) {
         addAttachments(from: [image]) { try await AttachmentProcessor.attachment(fromPhoto: $0) }
+    }
+
+    /// Each page becomes its own image: models read the text on it (on-device through OCR).
+    private func handleScannedPages(_ pages: [UIImage]) {
+        let numbered = Array(pages.enumerated())
+        addAttachments(from: numbered) { index, page in
+            let name = numbered.count == 1 ? "scan.jpg" : "scan-\(index + 1).jpg"
+            var attachment = try await AttachmentProcessor.attachment(fromPhoto: page, filename: name)
+            attachment.isScan = true
+            return attachment
+        }
     }
 
     private func handlePhotoSelection(_ items: [PhotosPickerItem]) {

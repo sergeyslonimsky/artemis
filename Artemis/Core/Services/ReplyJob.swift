@@ -23,6 +23,8 @@ struct ReplyJob: Sendable {
     let preset: Preset?
     /// On-device tools the route allows; narrowed further by the settings.
     var toolGroups: Set<ToolGroup> = []
+    /// The on-device model may use the translation tool.
+    var offersTranslation = false
     /// The reply will be read aloud.
     var isVoice = false
 
@@ -43,7 +45,10 @@ struct ReplyJob: Sendable {
         var batcher = StreamBatcher()
 
         do {
-            let turn = try makeTurn()
+            var turn = try makeTurn()
+            if backend.descriptor.kind == .onDevice {
+                turn.messages = try await readingImageText(in: turn.messages, onActivity: onActivity)
+            }
             outcome.lastUserPrompt = turn.messages.last(where: { $0.role == .user })?.content ?? ""
 
             for try await event in backend.stream(turn) {
@@ -64,6 +69,8 @@ struct ReplyJob: Sendable {
                     await onActivity(source)
                 case .actionDraft(let draft):
                     outcome.extras.drafts.append(draft)
+                case .toolCall(let call):
+                    outcome.extras.toolCalls.append(call)
                 }
             }
             // Backends may end the stream quietly when cancelled.
@@ -124,8 +131,47 @@ struct ReplyJob: Sendable {
         turn.conversationId = chatId
         turn.replyId = messageId
         turn.toolGroups = isCloud ? [] : toolGroups.intersection(settings.enabledToolGroups)
+        turn.offersTranslation = !isCloud && offersTranslation
         return turn
     }
+
+    /// Images the on-device model may need to see again whose text isn't stored yet: awaits the
+    /// reading started when they were attached (or reads the stored copy) and keeps the result.
+    /// A failed reading stays unknown, to be retried next turn.
+    private func readingImageText(
+        in messages: [Message],
+        onActivity: @Sendable (PersonalDataSource?) async -> Void
+    ) async throws -> [Message] {
+        var messages = messages
+        var remaining = Self.maxImagesReadPerTurn
+        for i in messages.indices.reversed() where remaining > 0 {
+            for j in messages[i].attachments.indices where remaining > 0 {
+                let attachment = messages[i].attachments[j]
+                guard attachment.kind == .image, attachment.recognizedText == nil, let data = attachment.data else { continue }
+                try Task.checkCancellation()
+                if remaining == Self.maxImagesReadPerTurn {
+                    await onActivity(.imageText)
+                }
+                remaining -= 1
+                do {
+                    let text = try await ImageTextReader.shared.text(id: attachment.id, data: data) ?? ""
+                    messages[i].attachments[j].recognizedText = text
+                    try database.setRecognizedText(text, attachmentId: attachment.id)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    Self.logger.error("Couldn't read the text in \(attachment.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                }
+            }
+        }
+        if remaining < Self.maxImagesReadPerTurn {
+            await onActivity(nil)
+        }
+        return messages
+    }
+
+    /// Bounds the wait before the reply in old chats full of never-read images.
+    static let maxImagesReadPerTurn = 4
 
     /// Replies built from the user's private data stay on the device: the cloud provider sees that
     /// such a reply existed, not what it said.

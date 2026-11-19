@@ -16,11 +16,13 @@ struct ChatView: View {
 
     init(
         chatId: String,
+        launch: ChatLaunch? = nil,
+        onLaunchApplied: @escaping () -> Void = {},
         composerFocus: FocusState<Bool>.Binding,
         onOpenDrawer: (() -> Void)? = nil,
         onNewChat: @escaping () -> Void = {}
     ) {
-        _session = State(initialValue: ChatSessionModel(chatId: chatId))
+        _session = State(initialValue: ChatSessionModel(chatId: chatId, launch: launch, onLaunchApplied: onLaunchApplied))
         self.composerFocus = composerFocus
         self.onOpenDrawer = onOpenDrawer
         self.onNewChat = onNewChat
@@ -98,6 +100,7 @@ struct ChatView: View {
         .task { await session.observeProviders() }
         .task { await session.observeSettings() }
         .task { await session.observePresets() }
+        .defaultFocus(composerFocus, session.launchFocusesComposer)
     }
 
     @ToolbarContentBuilder
@@ -108,21 +111,28 @@ struct ChatView: View {
             }
         }
         ToolbarItem(placement: .principal) {
-            Button {
-                session.isShowingModelPicker = true
-            } label: {
-                HStack(spacing: 4) {
-                    Text(session.routeTitle)
-                        .font(.headline)
-                        .lineLimit(1)
-                    Image(systemName: "chevron.down")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.secondary)
+            VStack(spacing: 2) {
+                Button {
+                    session.isShowingModelPicker = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(session.routeTitle)
+                            .font(.headline)
+                            .lineLimit(1)
+                        Image(systemName: "chevron.down")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .foregroundStyle(.primary)
                 }
-                .foregroundStyle(.primary)
+                .buttonStyle(.plain)
+                .accessibilityLabel("Model: \(session.routeAccessibilityLabel)")
+
+                if !NetworkMonitor.shared.isOnline {
+                    offlineChip
+                }
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Model: \(session.routeAccessibilityLabel)")
+            .animation(.default, value: NetworkMonitor.shared.isOnline)
         }
         // With the sidebar showing, its own New chat button is enough.
         if onOpenDrawer != nil {
@@ -131,6 +141,18 @@ struct ChatView: View {
                     .disabled(session.messages.isEmpty)
             }
         }
+    }
+
+    private var offlineChip: some View {
+        Label("Offline · cloud unavailable", systemImage: "wifi.slash")
+            .labelStyle(.titleAndIcon)
+            .font(.caption2.weight(.medium))
+            .lineLimit(1)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Color.secondary.opacity(0.12), in: .capsule)
+            .transition(.opacity)
     }
 
     private var emptyState: some View {
@@ -155,7 +177,6 @@ struct ChatView: View {
             onRegenerate: session.canRegenerate(message) ? { session.regenerate(message) } : nil,
             onAskCloud: session.canAskCloud(message) ? { session.askCloud(message) } : nil,
             onConsent: { session.resolveConsent(message, choice: $0) },
-            cloudAvailable: session.cloudTarget != nil,
             onDraft: { draft, confirm in
                 Task {
                     if await session.resolveDraft(draft, in: message, confirm: confirm) {

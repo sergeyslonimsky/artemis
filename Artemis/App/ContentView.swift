@@ -1,9 +1,12 @@
+import AppIntents
+import os
 import SwiftUI
 
 /// Root: the current chat with the chat list. On iPhone the list is a drawer that slides in from
 /// the left; with room for both (iPad, wide windows) it is a sidebar next to the chat.
 struct ContentView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.scenePhase) private var scenePhase
     /// A fresh id is a draft: the chat is only stored once its first message is sent.
     @State private var chatId = ContentView.newChatId()
     @State private var isDrawerOpen = false
@@ -12,6 +15,12 @@ struct ContentView: View {
     @FocusState private var isComposerFocused: Bool
     /// Bumped when the user starts a new chat, for its haptic.
     @State private var newChatCount = 0
+    /// How the current chat was opened from outside the app (Siri, Shortcuts, the share sheet…);
+    /// cleared once the chat applied it, so it never runs twice.
+    @State private var launch: ChatLaunch?
+    /// Shared items already opened: the URL and the fallback check can both report the same one.
+    @State private var handledSharedIds: Set<String> = []
+    private static let logger = Logger(subsystem: "com.artemis.ios", category: "Launch")
 
     private static func newChatId() -> String {
         UUID().uuidString.lowercased()
@@ -29,7 +38,29 @@ struct ContentView: View {
             SettingsView()
         }
         .sensoryFeedback(.impact(weight: .light), trigger: newChatCount)
+        .onAppIntentExecution(AskArtemisIntent.self) { intent in
+            open(ChatLaunch(chatId: Self.newChatId(), prompt: intent.question, autoSend: true))
+        }
+        .onAppIntentExecution(NewChatIntent.self) { _ in
+            open(ChatLaunch(chatId: Self.newChatId(), focusComposer: true))
+        }
+        .onAppIntentExecution(VoiceModeIntent.self) { _ in
+            open(ChatLaunch(chatId: Self.newChatId(), voice: true))
+        }
+        .onOpenURL { url in
+            if let id = SharedInbox.itemId(in: url) { openSharedItem(id) }
+        }
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            // The share extension couldn't open the app; the user opened it soon after.
+            if phase == .active, let id = SharedInbox.latestItemId(maxAge: Self.sharedItemLifetime) {
+                openSharedItem(id)
+            }
+        }
+        .task { await SharedInbox.removeItems(olderThan: Self.sharedItemLifetime) }
     }
+
+    /// How long a shared item waits for the app to be opened.
+    private static let sharedItemLifetime: TimeInterval = 10 * 60
 
     private var splitLayout: some View {
         NavigationSplitView {
@@ -44,6 +75,8 @@ struct ContentView: View {
     private func chatView(onOpenDrawer: (() -> Void)?) -> some View {
         ChatView(
             chatId: chatId,
+            launch: launch?.chatId == chatId ? launch : nil,
+            onLaunchApplied: { launch = nil },
             composerFocus: $isComposerFocused,
             onOpenDrawer: onOpenDrawer,
             onNewChat: startNewChat
@@ -140,6 +173,30 @@ struct ContentView: View {
         chatId = Self.newChatId()
         setDrawer(open: false)
         newChatCount += 1
+    }
+
+    // MARK: - Launches from outside the app
+
+    /// Its files are converted first; if the user moved on meanwhile (another chat, another
+    /// launch), the item is dropped rather than replacing what they're looking at.
+    private func openSharedItem(_ id: String) {
+        guard handledSharedIds.insert(id).inserted else { return }
+        let startingChatId = chatId
+        Task {
+            do {
+                let shared = try await SharedInbox.takeLaunch(id: id, chatId: Self.newChatId())
+                if chatId == startingChatId { open(shared) }
+            } catch {
+                Self.logger.error("Opening a shared item failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    private func open(_ newLaunch: ChatLaunch) {
+        showingSettings = false
+        launch = newLaunch
+        chatId = newLaunch.chatId
+        setDrawer(open: false)
     }
 }
 

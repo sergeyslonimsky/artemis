@@ -57,6 +57,12 @@ enum OnDeviceModel {
             .sorted()
     }
 
+    /// Whether the model officially supports a language; it may answer others, but noticeably worse.
+    static func speaks(_ language: Locale.Language) -> Bool {
+        guard let code = language.languageCode else { return false }
+        return SystemLanguageModel.default.supportsLocale(Locale(languageCode: code))
+    }
+
     @MainActor private static var lastPrewarm: Date?
 
     /// Loads the model into memory ahead of the first request. Repeated calls within a short

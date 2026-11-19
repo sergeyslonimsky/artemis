@@ -36,7 +36,7 @@ enum PersonalDataTools {
             case .weather:
                 [WeatherTool(sink: sink)]
             case .places:
-                [CurrentLocationTool(sink: sink), SearchPlacesTool(sink: sink)]
+                [CurrentLocationTool(sink: sink), SearchPlacesTool(sink: sink), TravelTimeTool(sink: sink)]
             case .health:
                 [HealthDataTool(sink: sink)]
             }
@@ -59,10 +59,20 @@ enum PersonalDataTools {
             case .weather:
                 "Use getWeather for the weather and forecast; leave the place empty for the user's location."
             case .places:
-                "Use getCurrentLocation for where the user is, and searchPlaces to find places."
+                "Use getCurrentLocation for where the user is, searchPlaces to find places, and getTravelTime for "
+                    + "how long it takes to get somewhere or when to leave."
             case .health:
                 "Use getHealthData to read the user's activity, sleep and health data."
             }
+        }
+        if groups.contains(.places) {
+            lines.append(savedPlacesInstructions(SavedPlaces.load()))
+        }
+        if groups.contains(.places) {
+            lines.append("For a trip to the user's next event, call getTravelTime with the nextEvent destination: it finds the event.")
+        }
+        if groups.isSuperset(of: [.places, .alarms]) {
+            lines.append("For an alarm to leave in time, call getTravelTime first, then draftAlarm at the time it says to leave.")
         }
         if groups.contains(where: { [.schedule, .contacts, .alarms].contains($0) }) {
             lines.append("You can't do these things yourself: a draft tool shows a card the user confirms. "
@@ -70,6 +80,15 @@ enum PersonalDataTools {
                 + "you set, added or sent anything. Don't ask for confirmation in words: the card is the confirmation.")
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// The names to pass to getTravelTime; for an own place that isn't saved, the model asks.
+    static func savedPlacesInstructions(_ places: [SavedPlace]) -> String {
+        let ask = "For the user's own places that aren't saved (home, work…), ask for the address and mention "
+            + "they can save it in Settings › Device data & actions › Your places."
+        guard !places.isEmpty else { return "The user has no saved places. " + ask }
+        let names = places.map { "\"\($0.name)\"" }.joined(separator: ", ")
+        return "The user's saved places, to pass to getTravelTime by name as the start or the place: \(names). " + ask
     }
 
     /// Parses `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM` in the user's time zone.

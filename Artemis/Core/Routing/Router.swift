@@ -1,6 +1,5 @@
 import Foundation
 import FoundationModels
-import NaturalLanguage
 import UniformTypeIdentifiers
 import os
 
@@ -51,17 +50,14 @@ struct Router: Sendable {
         var context = context
         context.hasUnsupportedAttachment = await hasUnsupportedAttachment(context.message)
         let rules = RoutingRules(
-            supportsLanguage: { SystemLanguageModel.default.supportsLocale(Locale(languageCode: $0)) },
+            supportsLanguage: { OnDeviceModel.speaks(Locale.Language(languageCode: $0)) },
             onDeviceContextSize: SystemLanguageModel.default.contextSize
         )
         var decision: RouteDecision
         if let ruled = rules.evaluate(context) {
             decision = ruled
-            // A request about the user's own data in, say, Russian still needs the on-device tools:
-            // the cloud model can't see that data.
-            if ruled.reason == .unsupportedLanguage, !context.availableTools.isEmpty {
-                let classified = await RequestClassifier.classify(context)
-                if !classified.reason.toolGroups.isEmpty { decision = classified }
+            if ruled.reason == .unsupportedLanguage {
+                decision = await reconsiderLanguage(context, ruled: ruled)
             }
         } else {
             decision = await RequestClassifier.classify(context)
@@ -77,6 +73,21 @@ struct Router: Sendable {
             return .onDevice(.cloudCantReadAttachment)
         }
         return decision
+    }
+
+    /// A language the on-device model doesn't support. When it is installed for translation, the
+    /// on-device backend translates the turn, so the request is classified like an English one.
+    /// Otherwise only a request about the user's own data stays: the cloud model can't see that data.
+    private func reconsiderLanguage(_ context: RouteContext, ruled: RouteDecision) async -> RouteDecision {
+        if let translator = await OnDeviceTranslator.forText(context.message.content),
+           let english = try? await translator.toEnglish(context.message.content) {
+            var translated = context
+            translated.message.content = english
+            return await RequestClassifier.classify(translated)
+        }
+        guard !context.availableTools.isEmpty else { return ruled }
+        let classified = await RequestClassifier.classify(context)
+        return classified.reason.toolGroups.isEmpty ? ruled : classified
     }
 
     /// Images and text files always work; other files depend on what the model accepts.
@@ -144,11 +155,7 @@ struct RoutingRules: Sendable {
 
     /// `nil` when the text is too short to tell reliably.
     static func dominantLanguage(of text: String) -> Locale.LanguageCode? {
-        guard text.count >= 20 else { return nil }
-        let recognizer = NLLanguageRecognizer()
-        recognizer.processString(text)
-        guard let language = recognizer.dominantLanguage, language != .undetermined else { return nil }
-        return Locale.LanguageCode(language.rawValue)
+        Locale.Language(detectedIn: text, minimumLength: 20)?.languageCode
     }
 
     /// Whether a cloud model with `capabilities` can take all of the message's attachments.
@@ -187,6 +194,8 @@ enum RequestCategory {
     case alarm
     case weather
     case places
+    case travel
+    case leaveAlarm
     case health
     case math
     case freshInformation
@@ -218,6 +227,8 @@ enum RequestClassifier {
         - alarm: set an alarm or a timer.
         - weather: the weather or forecast, here or in a named place.
         - places: the user's current location, or finding places such as shops or restaurants nearby or in a named place.
+        - travel: how long it takes to get somewhere, directions, or when to leave to arrive on time.
+        - leaveAlarm: an alarm or a reminder to leave in time to get somewhere.
         - health: the user's own steps, sleep, heart rate, workouts, weight or other activity and health data.
         - deviceAction: asks to change a device setting or control another app.
         - math: any calculation, unit conversion with numbers, percentages, equations or word problems.
@@ -240,6 +251,10 @@ enum RequestClassifier {
         "do I need an umbrella today" -> weather
         "where am I" -> places
         "find a pharmacy nearby" -> places
+        "how long does it take to drive to work" -> travel
+        "how long from home to the office by bus" -> travel
+        "when should I leave for my 3pm meeting" -> travel
+        "set an alarm so I leave in time for my 3pm meeting" -> leaveAlarm
         "how did I sleep this week" -> health
         "how many steps did I walk yesterday" -> health
         "turn on dark mode" -> deviceAction
@@ -276,7 +291,6 @@ enum RequestClassifier {
         return switch category {
         case .smallTalk: .onDevice(.smallTalk)
         case .simpleQuestion: .onDevice(.simple)
-        case .writing: .onDevice(.writing)
         case .deviceAction: .onDevice(.deviceAction)
         case .personalData: tool(.schedule)
         case .contacts: tool(.contacts)
@@ -284,6 +298,10 @@ enum RequestClassifier {
         case .health: tool(.health)
         case .weather: tool(.weather)
         case .places: tool(.places)
+        case .travel: availableTools.contains(.places) ? .onDevice(.travel) : .cloud(.freshInformation)
+        // Without location the leave time is unknown: a plain alarm is the best on-device answer.
+        case .leaveAlarm: availableTools.contains(.places) ? .onDevice(.travelAlarm) : tool(.alarms)
+        case .writing: .onDevice(.writing)
         case .math: .cloud(.math)
         case .freshInformation: .cloud(.freshInformation)
         case .complexReasoning: .cloud(.complexReasoning)

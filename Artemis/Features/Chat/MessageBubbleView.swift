@@ -1,5 +1,5 @@
 import SwiftUI
-import MarkdownUI
+import Textual
 
 struct MessageBubbleView: View {
     let message: Message
@@ -11,8 +11,6 @@ struct MessageBubbleView: View {
     /// Re-answer an on-device reply with the cloud model; `nil` hides the action.
     var onAskCloud: (() -> Void)? = nil
     var onConsent: ((ConsentChoice) -> Void)? = nil
-    /// Whether the chat has a cloud model to escalate to.
-    var cloudAvailable = true
     /// Confirm (`true`) or dismiss a drafted event/reminder.
     var onDraft: ((ActionDraft, Bool) -> Void)? = nil
     /// Opens a drafted event in the calendar's editor.
@@ -112,8 +110,8 @@ struct MessageBubbleView: View {
                     if isStreaming {
                         StreamingMarkdownView(text: content)
                     } else {
-                        Markdown(content)
-                            .markdownTheme(.artemis)
+                        StructuredText(markdown: content)
+                            .artemisMarkdownStyle()
                     }
                 }
                 .padding(8)
@@ -144,16 +142,6 @@ struct MessageBubbleView: View {
 
             if message.status == .failed {
                 errorBanner
-            }
-
-            if message.backend == .onDevice, !isStreaming, let reason = message.routeReason, reason.prefersCloud {
-                Label(
-                    "A cloud model may answer this better: \(reason.explanation)."
-                        + (cloudAvailable ? "" : " Choose a cloud model to use it."),
-                    systemImage: "info.circle"
-                )
-                .font(.footnote)
-                .foregroundStyle(.secondary)
             }
 
             if !isStreaming {
@@ -350,8 +338,9 @@ private struct TextSelectionSheet: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                Text(text)
-                    .textSelection(.enabled)
+                StructuredText(markdown: text)
+                    .artemisMarkdownStyle()
+                    .textual.textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding()
             }
@@ -487,16 +476,16 @@ private struct MarkdownChunk: View, Equatable {
     let text: String
 
     var body: some View {
-        Markdown(text)
-            .markdownTheme(.artemis)
+        StructuredText(markdown: text)
+            .artemisMarkdownStyle()
     }
 }
 
-extension Theme {
-    /// GitHub styling for blocks, but body text on the system background at the system size
-    /// (the GitHub theme paints its own background, which shows as a box in dark mode).
-    @MainActor static let artemis = Theme.gitHub.text {
-        ForegroundColor(.primary)
-        FontSize(17)
+extension View {
+    /// GitHub styling for blocks, with body text in the primary color at the system body size.
+    func artemisMarkdownStyle() -> some View {
+        textual.structuredTextStyle(.gitHub)
+            .font(.body)
+            .foregroundStyle(.primary)
     }
 }

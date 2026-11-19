@@ -17,6 +17,9 @@ struct ChatTurn: Sendable {
     var replyId: String?
     /// On-device tools the model may use for this turn.
     var toolGroups: Set<ToolGroup> = []
+    /// A writing task: the on-device model gets the translation tool. Not a tool group, as it
+    /// reads no device data.
+    var offersTranslation = false
 
     init(
         messages: [Message],

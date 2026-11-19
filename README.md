@@ -13,6 +13,16 @@ with your permission.
   contacts, location and health data to answer you, and draft events, reminders, alarms, calls
   and messages that you confirm. Replies built on this data are never sent to a cloud provider.
 - **Voice.** A spoken conversation mode and dictation, recognized on the device.
+- **On-device translation.** In a language Apple's model doesn't support (e.g. Russian), the chat is
+  translated on the device both ways once the language is downloaded in **Settings › On-device
+  model › Translation**, instead of going to the cloud.
+- **Travel times.** "How long to get to work?" or "When should I leave for my 3pm meeting?": Apple
+  Maps estimates from your location, and Artemis offers an alarm for when to leave.
+- **Siri and Shortcuts.** "Ask Artemis", "Talk to Artemis" and "New chat in Artemis" work in Siri,
+  Spotlight, Shortcuts and on the Action button without setup; Control Center has controls for a
+  new chat and voice mode.
+- **Share sheet.** Share text, a Safari page, PDFs, images or screenshots to Artemis to summarize,
+  translate, add the dates in them to your calendar or ask anything about them.
 
 ## Requirements
 
@@ -24,7 +34,7 @@ with your permission.
 
 1. Clone the repository and open `Artemis.xcodeproj`.
 2. Choose the **Artemis** scheme and an iOS simulator, then run. Swift packages (GRDB,
-   MarkdownUI) resolve on the first build.
+   Textual) resolve on the first build.
 
 ### On your own device
 
@@ -40,8 +50,9 @@ Then edit `Config/Local.xcconfig`:
   Membership).
 - `APP_BUNDLE_ID` — a bundle identifier of your own, e.g. `com.yourname.artemis`.
 
-Select your device and run. Xcode creates the provisioning profile; the app uses the HealthKit
-capability, so your account must be able to provision it.
+Select your device and run. Xcode creates the provisioning profiles; the app uses the HealthKit
+capability, so your account must be able to provision it. The app and its share extension also
+share the App Group `group.<APP_BUNDLE_ID>`, which Xcode registers for your team.
 
 ## Using it
 
@@ -56,6 +67,9 @@ Artemis/
   App/            entry point and root layout (drawer on iPhone, sidebar on iPad)
   Core/           models, storage (GRDB), routing, backends, network, voice, device data tools
   Features/       SwiftUI screens: chat, sidebar, settings, voice mode, shared components
+ArtemisShare/     share extension: stages what was shared in the App Group and opens the app
+ArtemisWidgets/   Control Center controls
+Shared/           code compiled into the app and an extension (App Intents, the shared inbox)
 ArtemisTests/     unit tests (Swift Testing)
 Config/           signing settings (Base.xcconfig, your Local.xcconfig)
 docs/sources.md   references on Apple's on-device model and the system APIs used
@@ -78,6 +92,18 @@ xcodegen generate
 xcodebuild test -project Artemis.xcodeproj -scheme Artemis \
   -destination 'platform=iOS Simulator,name=iPhone 17'
 ```
+
+Model evals run requests through the real classifier and on-device model and check which tools
+it calls (`ArtemisTests/OnDeviceModelEvals.swift`). The simulator can't run the model, so they
+need a device with Apple Intelligence and are opt-in:
+
+```sh
+TEST_RUNNER_RUN_MODEL_EVALS=1 xcodebuild test -project Artemis.xcodeproj -scheme Artemis \
+  -destination 'id=<device UDID>' -only-testing:ArtemisTests/OnDeviceModelEvals
+```
+
+Run them after changing tools, their descriptions or the instructions: a fix for one request can
+break another.
 
 ## License
 

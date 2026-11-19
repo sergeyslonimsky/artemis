@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import UIKit
 @testable import Artemis
 
 @Suite("Reply job")
@@ -100,6 +101,53 @@ struct ReplyJobTests {
         ).run(onBatch: { _ in })
 
         #expect(backend.lastTurn?.toolGroups == [.weather])
+    }
+
+    @Test func translationToolOnlyOnDeviceAndIndependentOfDeviceData() async throws {
+        let (database, chatId, replyId) = try setUp()
+        var settings = try database.fetchSettings()
+        settings.personalDataTools = false
+        try database.saveSettings(settings)
+
+        let onDevice = RecordingBackend(kind: .onDevice)
+        _ = await ReplyJob(
+            database: database, chatId: chatId, messageId: replyId, backend: onDevice, preset: nil, offersTranslation: true
+        ).run(onBatch: { _ in })
+        #expect(onDevice.lastTurn?.offersTranslation == true)
+
+        let cloud = RecordingBackend(kind: .cloud)
+        _ = await ReplyJob(
+            database: database, chatId: chatId, messageId: replyId, backend: cloud, preset: nil, offersTranslation: true
+        ).run(onBatch: { _ in })
+        #expect(cloud.lastTurn?.offersTranslation == false)
+    }
+
+    @Test func onDeviceTurnsReadAndKeepTextOfUnreadImages() async throws {
+        let blank = try AttachmentProcessor.downscaledJPEG(from: UIGraphicsImageRenderer(size: CGSize(width: 40, height: 40)).pngData { _ in })
+        let unread = Attachment(filename: "photo.jpg", mime: "image/jpeg", kind: .image, data: blank)
+        let read = Attachment(filename: "receipt.jpg", mime: "image/jpeg", kind: .image, recognizedText: "TOTAL 9.99", data: blank)
+        let (database, chatId, replyId) = try setUp(history: [userMessage("Look", attachments: [unread, read])])
+
+        let cloud = RecordingBackend(kind: .cloud)
+        _ = await ReplyJob(database: database, chatId: chatId, messageId: replyId, backend: cloud, preset: nil).run(onBatch: { _ in })
+        #expect(cloud.lastTurn?.messages.first?.attachments.first?.recognizedText == nil)
+
+        let onDevice = RecordingBackend(kind: .onDevice)
+        _ = await ReplyJob(database: database, chatId: chatId, messageId: replyId, backend: onDevice, preset: nil).run(onBatch: { _ in })
+        #expect(onDevice.lastTurn?.messages.first?.attachments.map(\.recognizedText) == ["", "TOTAL 9.99"])
+        let stored = try #require(try database.fetchMessages(chatId: chatId).first).attachments
+        #expect(stored.map(\.recognizedText) == ["", "TOTAL 9.99"])
+    }
+
+    @Test func readsAtMostAFewImagesPerTurn() async throws {
+        let blank = try AttachmentProcessor.downscaledJPEG(from: UIGraphicsImageRenderer(size: CGSize(width: 40, height: 40)).pngData { _ in })
+        let images = (1...6).map { Attachment(filename: "\($0).jpg", mime: "image/jpeg", kind: .image, data: blank) }
+        let (database, chatId, replyId) = try setUp(history: [userMessage("Look", attachments: images)])
+
+        _ = await ReplyJob(database: database, chatId: chatId, messageId: replyId, backend: RecordingBackend(kind: .onDevice), preset: nil)
+            .run(onBatch: { _ in })
+        let stored = try #require(try database.fetchMessages(chatId: chatId).first).attachments
+        #expect(stored.count { $0.recognizedText != nil } == ReplyJob.maxImagesReadPerTurn)
     }
 
     @Test func voiceRepliesAskForSpokenAnswers() async throws {

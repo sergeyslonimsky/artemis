@@ -83,7 +83,7 @@ final class VoiceAudio: @unchecked Sendable {
             self.capturedBuffers = 0
         }
 
-        installTaps()
+        try installTaps()
         engine.prepare()
         try engine.start()
         if conversation { try player.playAudio() }
@@ -124,13 +124,13 @@ final class VoiceAudio: @unchecked Sendable {
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
-    private func installTaps() {
+    private func installTaps() throws {
         let input = engine.inputNode
-        input.installTap(onBus: 0, bufferSize: 1024, format: input.outputFormat(forBus: 0)) { [weak self] buffer, _ in
+        try input.installAudioTap(onBus: 0, bufferSize: 1024, format: input.outputFormat(forBus: 0)) { [weak self] buffer, _ in
             self?.capture(buffer)
         }
         guard isConversation else { return }
-        player.installTap(onBus: 0, bufferSize: 1024, format: Self.playbackFormat) { [weak self] buffer, _ in
+        try player.installAudioTap(onBus: 0, bufferSize: 1024, format: Self.playbackFormat) { [weak self] buffer, _ in
             guard let self else { return }
             let level = Self.level(of: buffer)
             self.lock.withLock { self.outputLevelValue = self.pendingBuffers > 0 ? level : 0 }
@@ -141,8 +141,8 @@ final class VoiceAudio: @unchecked Sendable {
         VoiceLog.log("audio configuration changed (running: \(engine.isRunning)), route \(Self.routeDescription)")
         engine.inputNode.removeTap(onBus: 0)
         if isConversation { player.removeTap(onBus: 0) }
-        installTaps()
         do {
+            try installTaps()
             engine.prepare()
             try engine.start()
             if isConversation { try player.playAudio() }
@@ -161,9 +161,11 @@ final class VoiceAudio: @unchecked Sendable {
 
     // MARK: - Capture
 
-    private func capture(_ buffer: AVAudioPCMBuffer) {
-        let level = Self.level(of: buffer)
-        let seconds = Double(buffer.frameLength) / buffer.format.sampleRate
+    private func capture(_ tapBuffer: AVReadOnlyAudioPCMBuffer) {
+        let level = Self.level(of: tapBuffer)
+        let seconds = Double(tapBuffer.frameLength) / tapBuffer.format.sampleRate
+        // Tap buffers are read-only; muting and the analyzer converter need one of our own.
+        let buffer = AVAudioPCMBuffer(copying: tapBuffer)
         lock.withLock {
             // While muted, silence keeps the recognizer's timeline moving.
             if muted { Self.silence(buffer) }
@@ -244,9 +246,9 @@ final class VoiceAudio: @unchecked Sendable {
     // MARK: - Levels
 
     /// RMS mapped from -50…0 dB to 0…1.
-    private static func level(of buffer: AVAudioPCMBuffer) -> Float {
-        guard let samples = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return 0 }
-        let count = Int(buffer.frameLength)
+    private static func level(of buffer: AVReadOnlyAudioPCMBuffer) -> Float {
+        guard buffer.frameLength > 0, case .float(let samples) = buffer.channelData(0) else { return 0 }
+        let count = min(buffer.frameLength, samples.count)
         var sum: Float = 0
         for index in 0..<count { sum += samples[index] * samples[index] }
         let rms = (sum / Float(count)).squareRoot()
