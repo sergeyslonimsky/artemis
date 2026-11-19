@@ -105,7 +105,7 @@ struct ImageTextRecognizerTests {
         #expect(strips.count == 1)
         #expect(strips[0].rect == CGRect(x: 0, y: 0, width: 1000, height: 1600))
         // Text touching the top edge can be reported just above it.
-        #expect(strips[0].owns(Block(top: 1.002, text: "")))
+        #expect(strips[0].owns(Line(text: "", box: CGRect(x: 0, y: 0.98, width: 1, height: 0.022))))
     }
 
     @Test func longImagesAreSplitIntoOverlappingStripsThatOwnEveryRowOnce() {
@@ -118,8 +118,8 @@ struct ImageTextRecognizerTests {
         }
         // Every row of pixels belongs to exactly one strip.
         for y in stride(from: 0.5, to: 2048, by: 7) {
-            let block = Block(top: 1 - y / 2048, text: "")
-            #expect(strips.count { $0.owns(block) } == 1)
+            let line = Line(text: "", box: CGRect(x: 0, y: 1 - (y + 10) / 2048, width: 1, height: 10 / 2048))
+            #expect(strips.count { $0.owns(line) } == 1)
         }
     }
 
@@ -130,12 +130,15 @@ struct ImageTextRecognizerTests {
         #expect(strips.last?.rect.maxY == 300)
     }
 
-    @Test func stripBlocksMoveToImageCoordinates() {
+    @Test func stripLinesMoveToImageCoordinates() {
         let strip = ImageTextRecognizer.Strip(
             rect: CGRect(x: 0, y: 100, width: 50, height: 200), imageHeight: 1000, ownedTop: 0, ownedBottom: 1000
         )
-        #expect(strip.toImage(Block(top: 1, text: "a")).top == 0.9)
-        #expect(strip.toImage(Block(top: 0.5, text: "a")).top == 0.8)
+        // The strip's top half: 100–200 px from the top of a 1000 px image.
+        let line = strip.toImage(Line(text: "a", box: CGRect(x: 0.2, y: 0.5, width: 0.3, height: 0.5)))
+        #expect(abs(line.box.maxY - 0.9) < 1e-9)
+        #expect(abs(line.box.minY - 0.8) < 1e-9)
+        #expect(line.box.minX == 0.2 && line.box.width == 0.3)
     }
 
     /// A long store-app screenshot: stored downscaled its print is too small to read, so the text

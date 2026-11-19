@@ -15,7 +15,7 @@ enum ImageTextRecognizer {
         var box: CGRect
     }
 
-    /// A piece of output placed by its top edge, so tables and loose lines interleave in page order.
+    /// A row of output placed by its top edge.
     struct Block: Equatable, Sendable {
         var top: CGFloat
         var text: String
@@ -28,15 +28,17 @@ enum ImageTextRecognizer {
     /// Layout survives: a receipt keeps each item next to its price. Throws when Vision fails
     /// or the task is cancelled, which callers must not take for "no text".
     static func recognizeText(in image: CGImage) async throws -> String? {
-        var blocks: [Block] = []
+        // Strips are joined line by line, before lines become rows: strips cut a page differently
+        // (one sees a row as a table, the next its lines apart), but each line comes out of exactly one.
+        var lines: [Line] = []
         for strip in strips(width: image.width, height: image.height) {
             try Task.checkCancellation()
             guard let cropped = image.cropping(to: strip.rect) else { continue }
-            blocks += try await self.blocks(in: cropped)
+            lines += try await self.lines(in: cropped)
                 .map { strip.toImage($0) }
                 .filter { strip.owns($0) }
         }
-        return text(of: blocks)
+        return text(of: rows(of: lines))
     }
 
     /// The blocks top to bottom, cut at `maxCharacters`; `nil` when there's nothing meaningful.
@@ -51,13 +53,13 @@ enum ImageTextRecognizer {
         return text.prefix(maxCharacters) + "\n" + truncationMarker
     }
 
-    private static func blocks(in image: CGImage) async throws -> [Block] {
+    private static func lines(in image: CGImage) async throws -> [Line] {
         // The line request only helps when the document request saw no text at all (a sign in a
         // photo); lines it saw and dropped as noise would be dropped again.
-        if let blocks = try await documentBlocks(in: image) {
-            return blocks
+        if let lines = try await documentLines(in: image) {
+            return lines
         }
-        return try await lineBlocks(in: image)
+        return try await plainLines(in: image)
     }
 
     // MARK: - Strips
@@ -67,23 +69,25 @@ enum ImageTextRecognizer {
     static let maxStripAspect = 1.5
     static let stripOverlap = 0.15
 
-    /// A horizontal band of the image (pixels, top-left origin) and the part of it whose blocks
-    /// it reports: blocks in the overlap belong to one strip only.
+    /// A horizontal band of the image (pixels, top-left origin) and the part of it whose lines
+    /// it reports: lines in the overlap belong to one strip only.
     struct Strip: Equatable {
         var rect: CGRect
         var imageHeight: CGFloat
         var ownedTop: CGFloat
         var ownedBottom: CGFloat
 
-        /// Moves a block from strip coordinates (normalized, bottom-left origin) to image ones.
-        func toImage(_ block: Block) -> Block {
-            let pixelsFromTop = rect.minY + (1 - block.top) * rect.height
-            return Block(top: 1 - pixelsFromTop / imageHeight, text: block.text)
+        /// Moves a line from strip coordinates (normalized, bottom-left origin) to image ones.
+        func toImage(_ line: Line) -> Line {
+            let top = rect.minY + (1 - line.box.maxY) * rect.height
+            let bottom = rect.minY + (1 - line.box.minY) * rect.height
+            let box = CGRect(x: line.box.minX, y: 1 - bottom / imageHeight, width: line.box.width, height: (bottom - top) / imageHeight)
+            return Line(text: line.text, box: box)
         }
 
-        /// Whether the block (image coordinates) starts in this strip's own part.
-        func owns(_ block: Block) -> Bool {
-            let pixelsFromTop = (1 - block.top) * imageHeight
+        /// Whether the line (image coordinates) starts in this strip's own part.
+        func owns(_ line: Line) -> Bool {
+            let pixelsFromTop = (1 - line.box.maxY) * imageHeight
             return pixelsFromTop >= ownedTop && pixelsFromTop < ownedBottom
         }
     }
@@ -115,50 +119,28 @@ enum ImageTextRecognizer {
         }
     }
 
-    /// Document structure (iOS 26+): tables come out as rows of cells, which keeps receipts,
-    /// price lists and forms readable; the rest goes through `rows(of:)`.
-    /// `nil` when the request found no text at all.
-    private static func documentBlocks(in image: CGImage) async throws -> [Block]? {
+    /// Lines from document recognition (iOS 26+), `nil` when it found no text at all.
+    private static func documentLines(in image: CGImage) async throws -> [Line]? {
         var request = RecognizeDocumentsRequest()
         request.textRecognitionOptions.automaticallyDetectLanguage = true
         request.textRecognitionOptions.useLanguageCorrection = true
         request.barcodeDetectionOptions.enabled = false
         guard let document = try await request.perform(on: image).first?.document,
               !document.text.lines.isEmpty else { return nil }
-
-        var tableBoxes: [CGRect] = []
-        var blocks: [Block] = []
-        for table in document.tables {
-            tableBoxes.append(table.boundingRegion.normalizedPath.boundingBox)
-            // Row by row: a table cut by a strip boundary is placed (and owned) per row.
-            for cells in table.rows {
-                let cellLines = cells.map { $0.content.text.lines.filter { $0.confidence >= minimumConfidence } }
-                let texts = cellLines
-                    .map { $0.map(\.transcript).joined(separator: " ") }
-                    .filter { !$0.isEmpty }
-                guard let top = cellLines.joined().map(\.boundingBox.cgRect.maxY).max(), !texts.isEmpty else { continue }
-                blocks.append(Block(top: top, text: texts.joined(separator: " | ")))
-            }
-        }
-
-        let lines = document.text.lines
+        return document.text.lines
             .filter { $0.confidence >= minimumConfidence }
             .map { Line(text: $0.transcript, box: $0.boundingBox.cgRect) }
-            .filter { line in !tableBoxes.contains { $0.contains(CGPoint(x: line.box.midX, y: line.box.midY)) } }
-        return blocks + rows(of: lines)
     }
 
     /// Plain line recognition, for images the document request finds nothing in (photos with a sign).
-    private static func lineBlocks(in image: CGImage) async throws -> [Block] {
+    private static func plainLines(in image: CGImage) async throws -> [Line] {
         var request = RecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.automaticallyDetectsLanguage = true
         request.usesLanguageCorrection = true
-        let observations = try await request.perform(on: image)
-        let lines = observations
+        return try await request.perform(on: image)
             .filter { $0.confidence >= minimumConfidence }
             .map { Line(text: $0.transcript, box: $0.boundingBox.cgRect) }
-        return rows(of: lines)
     }
 
     /// Joins lines that sit at the same height, left to right: Vision reports an item and its

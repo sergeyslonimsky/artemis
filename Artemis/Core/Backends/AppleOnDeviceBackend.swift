@@ -104,6 +104,14 @@ struct AppleOnDeviceBackend: ChatBackend {
         return tools.isEmpty ? base : base + "\n\n" + PersonalDataTools.instructions(for: tools)
     }
 
+    /// Without this the model took "rescan the receipt" for an action it can't take, though the
+    /// receipt's text was right there in the conversation.
+    static let imageTextInstructions = """
+        Images in this conversation come with the text recognized in them (OCR). When the user asks you \
+        to look at, re-read or rescan an image, even one from earlier, answer from that text: it is the \
+        image's content, so don't say you can't access or scan it.
+        """
+
     private static let logger = Logger(subsystem: "com.artemis.ios", category: "AppleOnDeviceBackend")
 
     init() {}
@@ -256,8 +264,10 @@ struct AppleOnDeviceBackend: ChatBackend {
     private static func instructions(for turn: ChatTurn, translation: String? = nil) -> String {
         let custom = Preset.effectiveSystemPrompt(preset: turn.preset, fallback: turn.systemPrompt)
         guard turn.usesAssistantPersona else { return custom ?? "" }
+        let hasImages = turn.messages.contains { $0.attachments.contains { $0.kind == .image } }
         let parts = [
             baseInstructions(tools: turn.toolGroups),
+            hasImages ? imageTextInstructions : nil,
             turn.offersTranslation ? TranslateTool.instructions : nil,
             translation,
             custom,
